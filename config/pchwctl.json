@@ -99,7 +99,8 @@
     }
   },
   "rgb": {
-    "fps": 10,
+    "fps": 60,
+    "deviceFps": { "it5711": 60, "ene-*": 20 },
     "brightness": 100,
     "groups": {
       "main": {

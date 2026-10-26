@@ -168,7 +168,7 @@ public static class Program
 
         // RGB: dry-run computes frames but never opens the controllers.
         List<ILedDevice> devices = isDryRun ? [] : DeviceFactory.Create(config.Devices, msg => logger.Log(msg));
-        var rgb = new RgbEngine(config.Rgb, devices, reference => ReadRgbSource(engine, reference), SystemClock.Instance, msg => logger.Log(msg));
+        var rgb = new RgbEngine(config.Rgb, devices, reference => ReadRgbSource(engine, reference), SystemClock.Instance, msg => logger.Log(msg), flushOnThreads: true);
 
         PipeServer? pipe = null;
         EngineHost? hostRef = null;

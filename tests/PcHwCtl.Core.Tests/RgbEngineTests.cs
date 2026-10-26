@@ -524,4 +524,48 @@ public class RgbEngineTests
         Assert.Contains(problems, p => p.Contains("not sorted", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(problems, p => p.Contains("invalid source", StringComparison.OrdinalIgnoreCase) && p.Contains("fan:nonexistent.rpm"));
     }
+
+    [Fact]
+    public void Test11_DeviceFpsCap_ThrottlesFlushesPerDevice_ReportsTiming()
+    {
+        // 11. Rainbow at 60 fps: an uncapped device flushes every frame, "ene-*" capped at 20 flushes every third.
+        var fast = new SliceAFakeLedDevice("it5711", new LedZone("strip", 3));
+        var slow = new SliceAFakeLedDevice("ene-0x71", new LedZone("dimm", 3));
+        var clock = new SliceAFakeClock();
+        var config = new RgbConfig
+        {
+            Fps = 60,
+            Brightness = 100,
+            DeviceFps = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase) { ["ene-*"] = 20 },
+            Groups = new Dictionary<string, RgbGroupConfig>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["main"] = new RgbGroupConfig
+                {
+                    Zones = ["it5711/strip", "ene-0x71/dimm"],
+                    Rule = new RgbRuleConfig { Type = "rainbow", PeriodS = 1f }
+                }
+            }
+        };
+
+        var engine = new RgbEngine(config, [fast, slow], _ => null, clock, _ => { });
+        for (int i = 0; i < 60; i++)
+        {
+            engine.Tick();
+            clock.Advance(TimeSpan.FromTicks(166_667));
+        }
+
+        Assert.Equal(60, fast.FlushCount);
+        Assert.Equal(20, slow.FlushCount);
+        Assert.Equal(20, slow.SetZoneCalls.Count); // skipped frames are merged, only the newest colors go out
+
+        string report = engine.TakeTimingReport();
+        Assert.Contains("60 fps", report);
+        Assert.Contains("ene-0x71 20/s", report);
+        Assert.Contains("it5711 60/s", report);
+        Assert.Equal("0 fps", engine.TakeTimingReport());
+
+        var validator = RgbConfigValidator.Validate(
+            new RgbConfig { DeviceFps = new(StringComparer.OrdinalIgnoreCase) { ["ene-*"] = 0 } }, new Config());
+        Assert.Contains(validator, p => p.Contains("deviceFps", StringComparison.Ordinal));
+    }
 }

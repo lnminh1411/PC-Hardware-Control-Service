@@ -61,6 +61,153 @@ public sealed class RgbEngine : IRgbControl, IDisposable
     private readonly Dictionary<string, RgbColor[]> _groupColorCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _loggedUnknowns = new(StringComparer.OrdinalIgnoreCase);
 
+    private readonly Dictionary<string, DeviceFlusher> _flushers = new(StringComparer.OrdinalIgnoreCase);
+    private readonly bool _flushOnThreads;
+    private int _framesSinceReport;
+    private DateTime _lastReport;
+
+    /// <summary>
+    /// Owns all writes to one device. Tick only stages the newest colors per zone; SetZone, Flush,
+    /// Initialize, Invalidate and Dispose run under DeviceLock. With threads on, each device flushes
+    /// on its own thread, so a slow device (ENE on the SMBus) never holds up the frame or the others.
+    /// Lock order: the engine gate may take DeviceLock and the stage lock; the device thread never takes the gate.
+    /// </summary>
+    private sealed class DeviceFlusher
+    {
+        public readonly ILedDevice Device;
+        public readonly object DeviceLock = new();
+        private readonly object _stageLock = new();
+        private readonly Dictionary<string, RgbColor[]> _staged = new(StringComparer.OrdinalIgnoreCase);
+        private readonly AutoResetEvent _signal = new(false);
+        private readonly IClock _clock;
+        private Thread? _thread;
+        private volatile bool _stop;
+        private DateTime? _lastFlush;
+        private int _count;
+        private double _totalMs;
+        private double _maxMs;
+
+        public volatile int CapFps;
+        public volatile bool Healthy;
+        public volatile string? Fault;
+
+        public DeviceFlusher(ILedDevice device, IClock clock)
+        {
+            Device = device;
+            _clock = clock;
+        }
+
+        public void Stage(string zone, ReadOnlySpan<RgbColor> colors)
+        {
+            lock (_stageLock) _staged[zone] = colors.ToArray();
+        }
+
+        private bool HasStaged
+        {
+            get { lock (_stageLock) return _staged.Count > 0; }
+        }
+
+        /// <summary>Time left before the fps cap allows the next flush.</summary>
+        public TimeSpan WaitForCap(DateTime now)
+        {
+            int cap = CapFps;
+            if (cap <= 0 || _lastFlush == null) return TimeSpan.Zero;
+            TimeSpan left = TimeSpan.FromMilliseconds(1000.0 / cap - 1.0) - (now - _lastFlush.Value);
+            return left > TimeSpan.Zero ? left : TimeSpan.Zero;
+        }
+
+        /// <summary>Writes the staged zones and flushes. Returns the error message, or null.</summary>
+        public string? FlushNow(DateTime now)
+        {
+            Dictionary<string, RgbColor[]> batch;
+            lock (_stageLock)
+            {
+                if (_staged.Count == 0) return null;
+                batch = new Dictionary<string, RgbColor[]>(_staged, StringComparer.OrdinalIgnoreCase);
+                _staged.Clear();
+            }
+
+            _lastFlush = now;
+            long start = System.Diagnostics.Stopwatch.GetTimestamp();
+            try
+            {
+                lock (DeviceLock)
+                {
+                    foreach (var (zone, colors) in batch)
+                    {
+                        Device.SetZone(zone, colors);
+                    }
+                    Device.Flush();
+                }
+            }
+            catch (Exception ex)
+            {
+                return ex.Message;
+            }
+
+            double ms = System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+            lock (_stageLock)
+            {
+                _count++;
+                _totalMs += ms;
+                _maxMs = Math.Max(_maxMs, ms);
+            }
+            return null;
+        }
+
+        public (int Count, double TotalMs, double MaxMs) TakeStats()
+        {
+            lock (_stageLock)
+            {
+                var result = (_count, _totalMs, _maxMs);
+                _count = 0;
+                _totalMs = 0;
+                _maxMs = 0;
+                return result;
+            }
+        }
+
+        public void Start()
+        {
+            _thread = new Thread(Run) { IsBackground = true, Name = $"PcHwCtl-Rgb-{Device.Id}" };
+            _thread.Start();
+        }
+
+        public void Signal() => _signal.Set();
+
+        public bool Stop(TimeSpan timeout)
+        {
+            _stop = true;
+            _signal.Set();
+            return _thread == null || _thread.Join(timeout);
+        }
+
+        private void Run()
+        {
+            while (!_stop)
+            {
+                _signal.WaitOne();
+                while (!_stop && Healthy && HasStaged)
+                {
+                    TimeSpan wait = WaitForCap(_clock.UtcNow);
+                    if (wait > TimeSpan.Zero)
+                    {
+                        Thread.Sleep(wait); // newer colors keep replacing the staged ones meanwhile
+                        continue;
+                    }
+
+                    string? fault = FlushNow(_clock.UtcNow);
+                    if (fault != null)
+                    {
+                        // The engine marks the device faulted on its next Tick and retries Initialize.
+                        Healthy = false;
+                        Fault = fault;
+                    }
+                }
+            }
+        }
+    }
+
     /// <summary>
     /// Gets group configuration status, active rules, and override states.
     /// </summary>
@@ -125,7 +272,8 @@ public sealed class RgbEngine : IRgbControl, IDisposable
         IReadOnlyList<ILedDevice> devices,
         Func<string, float?> readSource,
         IClock clock,
-        Action<string> log)
+        Action<string> log,
+        bool flushOnThreads = false)
     {
         _config = config ?? throw new ArgumentNullException(nameof(config));
         _devices = devices ?? throw new ArgumentNullException(nameof(devices));
@@ -134,6 +282,8 @@ public sealed class RgbEngine : IRgbControl, IDisposable
         _log = log ?? throw new ArgumentNullException(nameof(log));
 
         _startTime = _clock.UtcNow;
+        _lastReport = _startTime;
+        _flushOnThreads = flushOnThreads;
         _brightness = Math.Clamp(config.Brightness, 0f, 100f);
 
         foreach (var device in _devices)
@@ -159,6 +309,10 @@ public sealed class RgbEngine : IRgbControl, IDisposable
                 _lastInitAttempt[device.Id] = _startTime;
                 _log($"RGB device '{device.Id}' faulted: {ex.Message}");
             }
+
+            var flusher = new DeviceFlusher(device, _clock) { Healthy = _deviceStatus[device.Id] == "ok" };
+            _flushers[device.Id] = flusher;
+            if (_flushOnThreads) flusher.Start();
         }
     }
 
@@ -228,6 +382,16 @@ public sealed class RgbEngine : IRgbControl, IDisposable
 
             DateTime now = _clock.UtcNow;
 
+            // 0. Faults raised on device threads since the last frame
+            foreach (var flusher in _flushers.Values)
+            {
+                if (flusher.Fault is string fault)
+                {
+                    flusher.Fault = null;
+                    MarkFaulted(flusher.Device, fault);
+                }
+            }
+
             // 1. Expiry checked each Tick
             var expired = new List<string>();
             foreach (var (grp, ovr) in _overrides)
@@ -255,13 +419,24 @@ public sealed class RgbEngine : IRgbControl, IDisposable
                     if (_lastInitAttempt.TryGetValue(device.Id, out var lastAttempt) && (now - lastAttempt).TotalSeconds >= 10.0)
                     {
                         _lastInitAttempt[device.Id] = now;
+                        var flusher = _flushers[device.Id];
                         try
                         {
-                            if (device.Initialize())
+                            bool ok;
+                            lock (flusher.DeviceLock)
+                            {
+                                ok = device.Initialize();
+                                if (ok)
+                                {
+                                    try { device.Invalidate(); } catch { }
+                                }
+                            }
+
+                            if (ok)
                             {
                                 _deviceStatus[device.Id] = "ok";
+                                flusher.Healthy = true;
                                 _log($"RGB device '{device.Id}' recovered");
-                                try { device.Invalidate(); } catch { }
                                 _groupColorCache.Clear();
                             }
                         }
@@ -276,8 +451,8 @@ public sealed class RgbEngine : IRgbControl, IDisposable
             // 3. Time elapsed since start
             float t = Math.Max(0f, (float)(now - _startTime).TotalSeconds);
 
-            // 4. Track devices that receive SetZone this frame
-            var devicesToFlush = new HashSet<ILedDevice>();
+            // 4. Track devices that get new colors this frame
+            var devicesToFlush = new HashSet<DeviceFlusher>();
 
             // 5. Per group, evaluate active rule
             foreach (var (groupName, groupCfg) in _config.Groups)
@@ -317,32 +492,28 @@ public sealed class RgbEngine : IRgbControl, IDisposable
 
                     if (_deviceStatus.TryGetValue(rZone.Device.Id, out var devStatus) && devStatus == "ok")
                     {
-                        try
-                        {
-                            rZone.Device.SetZone(rZone.ZoneName, zoneColors);
-                            devicesToFlush.Add(rZone.Device);
-                        }
-                        catch (Exception ex)
-                        {
-                            MarkFaulted(rZone.Device, ex.Message);
-                        }
+                        var flusher = _flushers[rZone.Device.Id];
+                        flusher.Stage(rZone.ZoneName, zoneColors);
+                        devicesToFlush.Add(flusher);
                     }
                 }
             }
 
-            // 6. Flush each healthy device that got any SetZone this frame
-            foreach (var device in devicesToFlush)
+            // 6. Hand new colors to each device, which flushes at most at its own rate cap.
+            //    Colors a capped device skipped stay staged and go out on its next slot.
+            _framesSinceReport++;
+            foreach (var flusher in _flushers.Values)
             {
-                if (_deviceStatus.TryGetValue(device.Id, out var devStatus) && devStatus == "ok")
+                flusher.CapFps = FpsCapFor(flusher.Device.Id);
+                if (!flusher.Healthy) continue;
+
+                if (_flushOnThreads)
                 {
-                    try
-                    {
-                        device.Flush();
-                    }
-                    catch (Exception ex)
-                    {
-                        MarkFaulted(device, ex.Message);
-                    }
+                    if (devicesToFlush.Contains(flusher)) flusher.Signal();
+                }
+                else if (flusher.WaitForCap(now) == TimeSpan.Zero && flusher.FlushNow(now) is string fault)
+                {
+                    MarkFaulted(flusher.Device, fault);
                 }
             }
         }
@@ -390,7 +561,7 @@ public sealed class RgbEngine : IRgbControl, IDisposable
             {
                 try
                 {
-                    device.Invalidate();
+                    lock (_flushers[device.Id].DeviceLock) device.Invalidate();
                 }
                 catch (Exception ex)
                 {
@@ -412,8 +583,23 @@ public sealed class RgbEngine : IRgbControl, IDisposable
             if (_disposed) return;
             _disposed = true;
 
+            foreach (var flusher in _flushers.Values)
+            {
+                if (!flusher.Stop(TimeSpan.FromMilliseconds(500)))
+                {
+                    _log($"RGB device '{flusher.Device.Id}' flush thread did not stop within 500 ms");
+                }
+            }
+
             foreach (var device in _devices)
             {
+                // A device stuck mid-flush keeps its lock; skip it rather than hang shutdown.
+                object deviceLock = _flushers[device.Id].DeviceLock;
+                if (!Monitor.TryEnter(deviceLock, TimeSpan.FromMilliseconds(500)))
+                {
+                    _log($"RGB device '{device.Id}' busy, skipped Dispose");
+                    continue;
+                }
                 try
                 {
                     device.Dispose();
@@ -421,6 +607,10 @@ public sealed class RgbEngine : IRgbControl, IDisposable
                 catch (Exception ex)
                 {
                     _log($"RGB device '{device.Id}' Dispose threw: {ex.Message}");
+                }
+                finally
+                {
+                    Monitor.Exit(deviceLock);
                 }
             }
         }
@@ -432,6 +622,39 @@ public sealed class RgbEngine : IRgbControl, IDisposable
     public void Dispose()
     {
         Shutdown();
+    }
+
+    /// <summary>
+    /// Frame rate and per-device flush timing since the last call, e.g. "52 fps, it5711 60/s avg 1.1 max 2.0 ms". Resets the counters.
+    /// </summary>
+    public string TakeTimingReport()
+    {
+        lock (_gate)
+        {
+            DateTime now = _clock.UtcNow;
+            double seconds = Math.Max((now - _lastReport).TotalSeconds, 0.001);
+            var parts = new List<string> { $"{_framesSinceReport / seconds:0} fps" };
+            foreach (var (id, flusher) in _flushers)
+            {
+                var (count, totalMs, maxMs) = flusher.TakeStats();
+                if (count == 0) continue;
+                parts.Add(string.Create(CultureInfo.InvariantCulture,
+                    $"{id} {count / seconds:0}/s avg {totalMs / count:0.0} max {maxMs:0.0} ms"));
+            }
+            _framesSinceReport = 0;
+            _lastReport = now;
+            return string.Join(", ", parts);
+        }
+    }
+
+    private int FpsCapFor(string deviceId)
+    {
+        if (_config.DeviceFps.TryGetValue(deviceId, out int exact)) return exact;
+        foreach (var (key, fps) in _config.DeviceFps)
+        {
+            if (key.EndsWith('*') && deviceId.StartsWith(key[..^1], StringComparison.OrdinalIgnoreCase)) return fps;
+        }
+        return 0;
     }
 
     /// <summary>
@@ -451,6 +674,7 @@ public sealed class RgbEngine : IRgbControl, IDisposable
         bool wasOk = !_deviceStatus.TryGetValue(device.Id, out var current) || current == "ok";
         _deviceStatus[device.Id] = status;
         _lastInitAttempt[device.Id] = _clock.UtcNow;
+        if (_flushers.TryGetValue(device.Id, out var flusher)) flusher.Healthy = false;
 
         if (wasOk)
         {

@@ -28,6 +28,14 @@ public static class RgbConfigValidator
             problems.Add($"RGB fps {rgb.Fps} outside valid range 1..60.");
         }
 
+        foreach (var (device, fps) in rgb.DeviceFps)
+        {
+            if (fps < 1 || fps > 60)
+            {
+                problems.Add($"RGB deviceFps '{device}' = {fps} outside valid range 1..60.");
+            }
+        }
+
         if (rgb.Brightness < 0f || rgb.Brightness > 100f)
         {
             problems.Add($"RGB brightness {rgb.Brightness} outside valid range 0..100.");

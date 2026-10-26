@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 using PcHwCtl.Core;
 using PcHwCtl.Core.Rgb;
 using PcHwCtl.Service.Ipc;
@@ -20,7 +22,7 @@ public sealed class EngineHost : IDisposable
     private volatile bool _stopped;
     private int _shutdownRan;
     private int _tickMs;
-    private int _rgbFrameMs;
+    private double _rgbFrameMs;
     private int _consecutiveFailures;
     private const int MaxConsecutiveFailures = 5;
 
@@ -44,7 +46,7 @@ public sealed class EngineHost : IDisposable
         _logger = logger;
         _consoleOutput = consoleOutput;
         _tickMs = initialConfig.TickMs;
-        _rgbFrameMs = 1000 / Math.Clamp(initialConfig.Rgb.Fps, 1, 60);
+        _rgbFrameMs = 1000.0 / Math.Clamp(initialConfig.Rgb.Fps, 1, 60);
 
         try
         {
@@ -85,7 +87,9 @@ public sealed class EngineHost : IDisposable
     {
         StartWatchdog();
         _pipe?.Start();
-        Task rgbLoop = _rgb != null ? Task.Run(() => RgbLoopAsync(cancellationToken)) : Task.CompletedTask;
+        Task rgbLoop = _rgb != null
+            ? Task.Factory.StartNew(() => RgbLoop(cancellationToken), TaskCreationOptions.LongRunning)
+            : Task.CompletedTask;
 
         _logger.Log("PcHwCtl engine started.");
 
@@ -152,6 +156,7 @@ public sealed class EngineHost : IDisposable
                 if (_rgb != null)
                 {
                     line += " | rgb " + string.Join(" ", _rgb.DeviceStatus.Select(kv => $"{kv.Key}={kv.Value}"));
+                    line += " | " + _rgb.TakeTimingReport();
                 }
                 if (!string.IsNullOrEmpty(line))
                 {
@@ -184,30 +189,43 @@ public sealed class EngineHost : IDisposable
         ShutdownAll();
     }
 
-    private async Task RgbLoopAsync(CancellationToken cancellationToken)
-    {
-        while (!cancellationToken.IsCancellationRequested && !_stopped)
-        {
-            DateTime frameStart = DateTime.UtcNow;
-            try
-            {
-                _rgb!.Tick();
-            }
-            catch (Exception ex)
-            {
-                // RgbEngine handles device faults itself; anything here is a bug, keep the fans running.
-                _logger.Log($"RGB frame failed: {ex.Message}");
-            }
+    [DllImport("winmm.dll")]
+    private static extern uint timeBeginPeriod(uint periodMs);
 
-            int remaining = _rgbFrameMs - (int)(DateTime.UtcNow - frameStart).TotalMilliseconds;
-            try
+    [DllImport("winmm.dll")]
+    private static extern uint timeEndPeriod(uint periodMs);
+
+    private void RgbLoop(CancellationToken cancellationToken)
+    {
+        // The default 15.6 ms timer tick cannot pace 60 fps; ask for 1 ms while the loop runs.
+        timeBeginPeriod(1);
+        try
+        {
+            var clock = Stopwatch.StartNew();
+            double nextFrameMs = 0;
+            while (!cancellationToken.IsCancellationRequested && !_stopped)
             {
-                await Task.Delay(Math.Max(remaining, 10), cancellationToken);
+                try
+                {
+                    _rgb!.Tick();
+                }
+                catch (Exception ex)
+                {
+                    // RgbEngine handles device faults itself; anything here is a bug, keep the fans running.
+                    _logger.Log($"RGB frame failed: {ex.Message}");
+                }
+
+                // Fixed schedule; after a stall, restart from now instead of bursting to catch up.
+                nextFrameMs += _rgbFrameMs;
+                double nowMs = clock.Elapsed.TotalMilliseconds;
+                if (nextFrameMs < nowMs) nextFrameMs = nowMs;
+                int sleepMs = (int)(nextFrameMs - nowMs);
+                if (sleepMs > 0) Thread.Sleep(sleepMs);
             }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
+        }
+        finally
+        {
+            timeEndPeriod(1);
         }
     }
 
@@ -229,7 +247,7 @@ public sealed class EngineHost : IDisposable
                     _engine.ReplaceConfig(newConfig);
                     _rgb?.ReplaceConfig(newConfig.Rgb);
                     _tickMs = newConfig.TickMs;
-                    _rgbFrameMs = 1000 / Math.Clamp(newConfig.Rgb.Fps, 1, 60);
+                    _rgbFrameMs = 1000.0 / Math.Clamp(newConfig.Rgb.Fps, 1, 60);
                     _logger.Log("Config successfully reloaded. Device and IPC settings apply after a restart.");
                 }
                 catch (ConfigException ex)

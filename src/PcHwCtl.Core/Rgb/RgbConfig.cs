@@ -3,6 +3,12 @@ namespace PcHwCtl.Core.Rgb;
 public sealed class RgbConfig
 {
     public int Fps { get; set; } = 10;
+
+    /// <summary>
+    /// Per-device flush rate cap, keyed by device id or a prefix ending in '*' (e.g. "ene-*").
+    /// Frames are still computed at Fps; a capped device gets the newest colors at its own rate.
+    /// </summary>
+    public Dictionary<string, int> DeviceFps { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public float Brightness { get; set; } = 100;
     public Dictionary<string, RgbGroupConfig> Groups { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
