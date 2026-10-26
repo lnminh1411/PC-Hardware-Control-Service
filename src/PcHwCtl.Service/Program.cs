@@ -158,13 +158,19 @@ public static class Program
             return 3;
         }
 
+        // RX 6600: its curve and Zero RPM live in the GPU firmware, written through ADL Overdrive8.
+        AmdOd8FanOutput? nativeFans = !isDryRun && config.Fans.Values.Any(f => string.Equals(f.Driver, "amd-od8", StringComparison.OrdinalIgnoreCase))
+            ? AmdOd8FanOutput.TryCreate(msg => logger.Log(msg))
+            : null;
+
         var engine = new FanEngine(
             config,
             hardware,
             hardware,
             SystemClock.Instance,
             msg => logger.Log(msg),
-            isDryRun);
+            isDryRun,
+            nativeFans);
 
         // RGB: dry-run computes frames but never opens the controllers.
         List<ILedDevice> devices = isDryRun ? [] : DeviceFactory.Create(config.Devices, msg => logger.Log(msg));

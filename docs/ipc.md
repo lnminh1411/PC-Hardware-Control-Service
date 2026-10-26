@@ -57,8 +57,10 @@ A fan with a `zeroRpm` block parks below `stopBelowC` and stays parked until its
 
 | `park` | How the fan stops | Used for |
 |---|---|---|
-| `zero` | writes 0 % | RX 6600 (accepts 0 %) |
+| `zero` | writes 0 % | a fan that accepts 0 % |
 | `release` | hands the fan back to the driver, whose own auto mode stops it at idle; the curve takes it back at `startAtC` | RTX 3050 (clamps manual 0 % to about 1600 rpm) |
+
+The RX 6600 does not use either: it has `"driver": "amd-od8"`, so its 5-point curve and Zero RPM flag go into the GPU firmware ([protocols/amd-od8.md](protocols/amd-od8.md)). With Zero RPM on, the firmware stops the fan below its fixed 52 °C; `stopBelowC`, `startAtC` and `park` do not apply. `fan set gpu-amd <pct>` writes a flat curve (at least 30 %, the firmware minimum) until it expires; 0 % means Zero RPM with the lowest curve. Everything is rewritten at every start, because Adrenalin cannot keep these settings on this Windows build.
 
 State file keys: `hw.<fan>.zr` = 1/0 (Zero RPM on/off), `hw.<fan>.park` = 1 while parked.
 

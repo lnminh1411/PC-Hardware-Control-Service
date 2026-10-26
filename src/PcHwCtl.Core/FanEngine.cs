@@ -37,6 +37,9 @@ public sealed class FanEngine : IFanControl
         public bool Parked { get; set; }
         public bool Released { get; set; }
 
+        // Native (firmware) curve last handed to the driver; null = not yet.
+        public NativeFanCurve? LastNative { get; set; }
+
         public FanRuntime(string name, FanConfig config, IFanCurve curve)
         {
             Name = name;
@@ -51,6 +54,9 @@ public sealed class FanEngine : IFanControl
     private readonly IClock _clock;
     private readonly Action<string> _log;
     private readonly bool _dryRun;
+    private readonly INativeFanOutput? _native;
+    private readonly HashSet<string> _nativeControls = new(StringComparer.OrdinalIgnoreCase);
+    private string? _lastNativeError;
 
     private readonly Dictionary<string, FanRuntime> _fans = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, DateTime> _lastGoodTime = new(StringComparer.OrdinalIgnoreCase);
@@ -73,7 +79,8 @@ public sealed class FanEngine : IFanControl
         IFanOutput @out,
         IClock clock,
         Action<string> log,
-        bool dryRun)
+        bool dryRun,
+        INativeFanOutput? native = null)
     {
         _config = cfg;
         _sensorSource = src;
@@ -81,6 +88,7 @@ public sealed class FanEngine : IFanControl
         _clock = clock;
         _log = log;
         _dryRun = dryRun;
+        _native = native;
 
         InitializeFans();
     }
@@ -226,9 +234,8 @@ public sealed class FanEngine : IFanControl
         {
             foreach (var controlId in _writtenControls.ToList())
             {
-                _fanOutput.SetDefault(controlId);
+                ReleaseControl(controlId);
             }
-            _writtenControls.Clear();
         }
         finally
         {
@@ -246,7 +253,20 @@ public sealed class FanEngine : IFanControl
 
     private void ReleaseControl(string controlId)
     {
-        if (_writtenControls.Remove(controlId))
+        if (!_writtenControls.Remove(controlId)) return;
+
+        if (_nativeControls.Remove(controlId))
+        {
+            try
+            {
+                _native!.Reset(controlId);
+            }
+            catch (Exception ex)
+            {
+                _log($"Fan control '{controlId}': native reset failed: {ex.Message}");
+            }
+        }
+        else
         {
             _fanOutput.SetDefault(controlId);
         }
@@ -322,6 +342,12 @@ public sealed class FanEngine : IFanControl
             IFanCurve curve = fan.OverrideCurve ?? fan.Curve;
             if (!_config.Curves.TryGetValue(curveName, out var curveCfg))
             {
+                continue;
+            }
+
+            if (fan.Config.Driver != null && _native != null)
+            {
+                TickNative(fanName, fan, curveName, curve, curveCfg, now);
                 continue;
             }
 
@@ -464,6 +490,71 @@ public sealed class FanEngine : IFanControl
             bool? zeroRpm = fan.Config.ZeroRpm != null ? ZeroRpmOn(fan) : null;
             _states[fanName] = new FanState(output, target, temp, isMissing, currentOverride, rpm, curveName, zeroRpm, fan.Parked);
         }
+    }
+
+    /// <summary>
+    /// Firmware-curve fan: hands the driver the configured 5-point curve and Zero RPM flag, or a flat curve while a
+    /// % override lasts (0 % = Zero RPM with the lowest curve). Writes only on change. The % shown is what the
+    /// software curve says the firmware should be doing.
+    /// </summary>
+    private void TickNative(string fanName, FanRuntime fan, string curveName, IFanCurve curve, CurveConfig curveCfg, DateTime now)
+    {
+        float? temp = ReadSource(curveCfg.Source, now, out bool isMissing);
+
+        OverrideInfo? ov = null;
+        if (_overrides.TryGetValue(fanName, out var active))
+        {
+            if (now >= active.ExpiresAtUtc) _overrides.Remove(fanName);
+            else ov = active;
+        }
+
+        float shown = ov?.Pct ?? (isMissing ? 100f : curve.Evaluate(temp, now) ?? 100f);
+        bool zeroRpm = ov != null ? ov.Pct <= 0f : ZeroRpmOn(fan);
+
+        _config.Curves.TryGetValue(fan.Config.Curve, out var configured);
+        var basePoints = configured?.Points is { Count: 5 } pts
+            ? pts.Select(p => (p[0], p[1])).ToList()
+            : [(40f, 30f), (50f, 45f), (60f, 60f), (70f, 80f), (80f, 100f)];
+
+        // The configured curve, unless an override or an IPC curve switch asks for something else: then flat.
+        IReadOnlyList<(float, float)> points = ov == null && fan.OverrideCurveName == null
+            ? basePoints
+            : basePoints.Select(p => (p.Item1, Math.Max(shown, 30f))).ToList();
+        var desired = new NativeFanCurve(points, zeroRpm);
+
+        if (!fan.HasTicked || !desired.SameAs(fan.LastNative))
+        {
+            if (!_dryRun)
+            {
+                try
+                {
+                    _native!.Apply(fan.Config.Control, desired);
+                    _writtenControls.Add(fan.Config.Control);
+                    _nativeControls.Add(fan.Config.Control);
+                    fan.LastNative = desired;
+                    _lastNativeError = null;
+                }
+                catch (Exception ex)
+                {
+                    // Retried next tick; logged once per distinct error.
+                    if (_lastNativeError != ex.Message) _log($"Fan '{fanName}': native curve write failed: {ex.Message}");
+                    _lastNativeError = ex.Message;
+                }
+            }
+            else
+            {
+                fan.LastNative = desired;
+            }
+        }
+
+        fan.PreviousOutput = shown;
+        fan.HasTicked = true;
+
+        float? rpm = null;
+        if (!string.IsNullOrEmpty(fan.Config.Tach) && _sensorSource.TryRead(fan.Config.Tach, out float rpmValue)) rpm = rpmValue;
+
+        _states[fanName] = new FanState(shown, shown, temp, isMissing, ov, rpm, curveName,
+            fan.Config.ZeroRpm != null ? ZeroRpmOn(fan) : null, zeroRpm && rpm == 0f);
     }
 
     private float? ReadSource(string? sourceRef, DateTime now, out bool isMissing)

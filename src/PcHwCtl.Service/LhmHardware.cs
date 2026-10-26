@@ -6,8 +6,11 @@ namespace PcHwCtl.Service;
 public sealed class LhmHardware : ISensorSource, IFanOutput, IDisposable
 {
     private readonly Computer _computer;
-    private readonly Dictionary<string, ISensor> _sensorsById = new(StringComparer.OrdinalIgnoreCase);
-    private readonly List<(IHardware Hardware, ISensor Sensor)> _allSensors = [];
+    // Refresh runs on the fan thread while the RGB thread reads sensors: Refresh builds new collections and swaps
+    // them in under the gate, so readers never see a half-filled index and never wait for hardware.Update.
+    private readonly object _gate = new();
+    private Dictionary<string, ISensor> _sensorsById = new(StringComparer.OrdinalIgnoreCase);
+    private List<(IHardware Hardware, ISensor Sensor)> _allSensors = [];
     private readonly Dictionary<string, ISensor> _resolutionCache = new(StringComparer.OrdinalIgnoreCase);
 
     public LhmHardware()
@@ -28,13 +31,19 @@ public sealed class LhmHardware : ISensorSource, IFanOutput, IDisposable
 
     public void Refresh()
     {
-        _sensorsById.Clear();
-        _allSensors.Clear();
+        var byId = new Dictionary<string, ISensor>(StringComparer.OrdinalIgnoreCase);
+        var all = new List<(IHardware Hardware, ISensor Sensor)>();
 
         foreach (var hw in _computer.Hardware)
         {
             UpdateHardware(hw);
-            CollectSensors(hw);
+            CollectSensors(hw, byId, all);
+        }
+
+        lock (_gate)
+        {
+            _sensorsById = byId;
+            _allSensors = all;
         }
     }
 
@@ -47,29 +56,34 @@ public sealed class LhmHardware : ISensorSource, IFanOutput, IDisposable
         }
     }
 
-    private void CollectSensors(IHardware hardware)
+    private static void CollectSensors(IHardware hardware, Dictionary<string, ISensor> byId, List<(IHardware, ISensor)> all)
     {
         foreach (var sensor in hardware.Sensors)
         {
             string id = sensor.Identifier.ToString();
-            _sensorsById[id] = sensor;
-            _allSensors.Add((hardware, sensor));
+            byId[id] = sensor;
+            all.Add((hardware, sensor));
         }
 
         foreach (var sub in hardware.SubHardware)
         {
-            CollectSensors(sub);
+            CollectSensors(sub, byId, all);
         }
     }
 
     public IEnumerable<(IHardware Hardware, ISensor Sensor)> GetAllSensorsWithHardware()
     {
-        return _allSensors;
+        lock (_gate) return _allSensors;
     }
 
     public ISensor? ResolveSensor(string reference)
     {
         if (string.IsNullOrEmpty(reference)) return null;
+        lock (_gate) return ResolveSensorLocked(reference);
+    }
+
+    private ISensor? ResolveSensorLocked(string reference)
+    {
 
         if (_resolutionCache.TryGetValue(reference, out var cached))
         {
@@ -151,7 +165,7 @@ public sealed class LhmHardware : ISensorSource, IFanOutput, IDisposable
 
     public bool ValidateFanControls(IEnumerable<FanConfig> enabledFans, Action<string> log)
     {
-        var availableControls = _allSensors
+        var availableControls = GetAllSensorsWithHardware()
             .Where(x => x.Sensor.SensorType == SensorType.Control && x.Sensor.Control != null)
             .Select(x => x.Sensor.Identifier.ToString())
             .Distinct(StringComparer.OrdinalIgnoreCase)

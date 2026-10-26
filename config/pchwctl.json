@@ -131,6 +131,7 @@
     },
     "gpu-amd": {
       "control": "/gpu-amd/0/control/0",
+      "driver": "amd-od8",
       "tach": "/gpu-amd/0/fan/0",
       "curve": "gpu-amd",
       "zeroRpm": {

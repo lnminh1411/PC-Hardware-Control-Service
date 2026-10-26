@@ -769,4 +769,78 @@ public class CoreTests
         Assert.Contains(ex.Errors, e => e.Contains("'spin'"));
         Assert.Contains(ex.Errors, e => e.Contains("floorPct"));
     }
+
+    private sealed class FakeNativeOutput : INativeFanOutput
+    {
+        public List<(string Control, NativeFanCurve Curve)> Applied { get; } = [];
+        public List<string> Resets { get; } = [];
+        public void Apply(string controlId, NativeFanCurve curve) => Applied.Add((controlId, curve));
+        public void Reset(string controlId) => Resets.Add(controlId);
+    }
+
+    [Fact]
+    public void Test18_NativeCurve_AppliedOnChangeOnly_OverrideFlat_ResetOnShutdown()
+    {
+        // 18. driver amd-od8: the 5-point curve and Zero RPM go to the native output once and again only on change;
+        //     a % override sends a flat curve (Zero RPM off; 0 % = Zero RPM on), shutdown resets; no LHM writes.
+        var cfg = new Config
+        {
+            Curves = { ["c"] = new CurveConfig { Type = "graph", Source = "/t", Points = [[40f, 30f], [55f, 65f], [60f, 80f], [65f, 90f], [70f, 100f]] } },
+            Fans =
+            {
+                ["gpu"] = new FanConfig
+                {
+                    Control = "/ctrl/amd",
+                    Curve = "c",
+                    Driver = "amd-od8",
+                    ZeroRpm = new ZeroRpmConfig { Enabled = false }
+                }
+            }
+        };
+        ConfigLoader.Validate(cfg);
+        var src = new FakeSensorSource { Sensors = { ["/t"] = 50f } };
+        var fanOut = new FakeFanOutput();
+        var native = new FakeNativeOutput();
+        var clock = new FakeClock();
+        var engine = new FanEngine(cfg, src, fanOut, clock, _ => { }, false, native);
+
+        engine.Tick();
+        engine.Tick();
+        Assert.Single(native.Applied);
+        Assert.Equal([(40f, 30f), (55f, 65f), (60f, 80f), (65f, 90f), (70f, 100f)], native.Applied[0].Curve.Points);
+        Assert.False(native.Applied[0].Curve.ZeroRpm);
+
+        engine.SetZeroRpm("gpu", true);
+        engine.Tick();
+        Assert.True(native.Applied[^1].Curve.ZeroRpm);
+
+        engine.SetOverride("gpu", 70, TimeSpan.FromSeconds(30));
+        engine.Tick();
+        Assert.All(native.Applied[^1].Curve.Points, p => Assert.Equal(70f, p.Pct));
+        Assert.False(native.Applied[^1].Curve.ZeroRpm);
+
+        engine.SetOverride("gpu", 0, TimeSpan.FromSeconds(30));
+        engine.Tick();
+        Assert.All(native.Applied[^1].Curve.Points, p => Assert.Equal(30f, p.Pct));
+        Assert.True(native.Applied[^1].Curve.ZeroRpm);
+
+        clock.AdvanceSeconds(31);
+        engine.Tick();
+        Assert.Equal(65f, native.Applied[^1].Curve.Points[1].Pct);
+        Assert.True(native.Applied[^1].Curve.ZeroRpm);
+        Assert.Equal(5, native.Applied.Count);
+
+        engine.ForceRewrite();
+        engine.Tick();
+        Assert.Equal(6, native.Applied.Count);
+
+        engine.Shutdown();
+        Assert.Equal(["/ctrl/amd"], native.Resets);
+        Assert.Empty(fanOut.SetCalls);
+        Assert.Empty(fanOut.SetDefaultCalls);
+
+        cfg.Curves["c"].Points = [[40f, 30f], [70f, 100f]];
+        var ex = Assert.Throws<ConfigException>(() => ConfigLoader.Validate(cfg));
+        Assert.Contains(ex.Errors, e => e.Contains("exactly 5 points"));
+    }
 }

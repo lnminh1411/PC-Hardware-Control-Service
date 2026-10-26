@@ -63,6 +63,13 @@ public sealed class FanConfig
     public float FloorPct { get; set; } = 0;
     public float Offset { get; set; } = 0;
 
+    /// <summary>
+    /// Null = software curve written as a % each tick. "amd-od8" = the 5-point graph curve and Zero RPM go into the
+    /// GPU firmware (docs/protocols/amd-od8.md); the firmware then stops the fan below its own 52 °C, so
+    /// zeroRpm stopBelowC, startAtC and park do not apply.
+    /// </summary>
+    public string? Driver { get; set; }
+
     /// <summary>Optional: stop the fan below a temperature (GPU style). Null = fan never parks.</summary>
     public ZeroRpmConfig? ZeroRpm { get; set; }
 }
@@ -286,6 +293,22 @@ public static class ConfigLoader
             if (fan.FloorPct < 0f || fan.FloorPct > 100f)
             {
                 errors.Add($"Fan '{name}' floorPct {fan.FloorPct} outside 0-100.");
+            }
+
+            if (fan.Driver != null)
+            {
+                if (!string.Equals(fan.Driver, "amd-od8", StringComparison.OrdinalIgnoreCase))
+                {
+                    errors.Add($"Fan '{name}' driver '{fan.Driver}' unknown; only 'amd-od8' exists.");
+                }
+                else if (!config.Curves.TryGetValue(fan.Curve, out var nativeCurve) ||
+                    !string.Equals(nativeCurve.Type, "graph", StringComparison.OrdinalIgnoreCase) ||
+                    nativeCurve.Points is not { Count: 5 } pts ||
+                    pts.Any(pt => pt.Count != 2 || pt[0] < 25f || pt[0] > 100f || pt[1] < 30f || pt[1] > 100f) ||
+                    pts.Zip(pts.Skip(1)).Any(pair => pair.Second[0] <= pair.First[0]))
+                {
+                    errors.Add($"Fan '{name}' driver amd-od8 needs a graph curve of exactly 5 points, temperatures 25-100 rising, speeds 30-100.");
+                }
             }
 
             if (fan.ZeroRpm is { } zr)
