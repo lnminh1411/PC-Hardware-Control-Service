@@ -2,7 +2,7 @@
 
 > **This is for my PC only.** Sensor IDs, fan curves, LED layouts and RGB protocols are hard-wired to one machine (Gigabyte B860M GAMING X WIFI6E, IT8696E SuperIO, IT5711 RGB Fusion 2, ENE DRAM). Running it on other hardware can write to the wrong registers. Use it as reference, not as a drop-in tool.
 
-Windows service that replaces FanControl and OpenRGB on my PC, with a local IPC API so my [ESP32 carrier board](https://github.com/lnminh1411/ESP32-PC-Control-System) can read and set fans and RGB.
+Windows service that replaces FanControl and OpenRGB on my PC. Companion Project: [ESP32-PC-Control-System](https://github.com/lnminh1411/ESP32-PC-Control-System).
 
 ## Status
 
