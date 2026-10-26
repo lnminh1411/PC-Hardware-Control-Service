@@ -6,7 +6,7 @@ Windows service that replaces FanControl and OpenRGB on my PC. Companion Project
 
 ## Status
 
-All phases built: fans, IT5711 and ENE DRAM RGB, named-pipe IPC, install scripts. 47 unit tests pass. Verified on the live board in dry run (sensors, curves, IPC, state file). Not yet driving hardware: FanControl and OpenRGB still own the fans and LEDs until the first live run. See [docs/install.md](docs/install.md), [docs/ipc.md](docs/ipc.md) and [Plan.md](Plan.md).
+All phases built: fans, IT5711 and ENE DRAM RGB, named-pipe IPC, install scripts. 47 unit tests pass. Verified on the live board in dry run (sensors, curves, IPC, state file).
 
 ## Scope
 
