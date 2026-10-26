@@ -165,9 +165,9 @@ Optional later: LAN TCP/WebSocket with token so board talks over Wi-Fi when USB 
 | IT5711 protocol differs on fw 0.0.28.3 | capture OpenRGB HID traffic (USBPcap) as reference before writing |
 | PawnIO driver not installed | installer checks, FanControl already installed it |
 
-## 6. Open questions
-1. Separate service + pipe (plan above) or merge into ESP32PcStats?
-2. DRAM RGB native (Phase 3 risk) or keep OpenRGB headless for DRAM?
-3. Need OpenRGB SDK server on 6742 for anything?
-4. Hardware Fan Sync plugin: used for anything?
-5. .NET 8 OK, or stay .NET Fx 4 + `csc.exe` like pc_stats?
+## 6. Decisions (2026-10-26)
+1. Separate service. ESP32PcStats controls it over the pipe, no merge.
+2. Everything native, no OpenRGB anywhere.
+3. No OpenRGB SDK server shim.
+4. Hardware Fan Sync replaced by Mix-temp gradient (table in section 1).
+5. Latest .NET: .NET 10 now.
