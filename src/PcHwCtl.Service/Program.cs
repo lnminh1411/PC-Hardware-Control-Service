@@ -170,11 +170,16 @@ public static class Program
         List<ILedDevice> devices = isDryRun ? [] : DeviceFactory.Create(config.Devices, msg => logger.Log(msg));
         var rgb = new RgbEngine(config.Rgb, devices, reference => ReadRgbSource(engine, reference), SystemClock.Instance, msg => logger.Log(msg), flushOnThreads: true);
 
+        // Zero RPM toggles and brightness set over IPC outlive restarts; a dry run reads them but never saves.
+        string dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "PcHwCtl");
+        var persisted = new PersistedSettings(Path.Combine(dataDir, "settings.json"), msg => logger.Log(msg), save: !isDryRun);
+        persisted.Apply(engine, rgb);
+
         PipeServer? pipe = null;
         EngineHost? hostRef = null;
         if (config.Ipc.Enabled)
         {
-            var processor = new CommandProcessor(engine, rgb, () => config.Ipc, SystemClock.Instance);
+            var processor = new CommandProcessor(engine, rgb, () => config.Ipc, SystemClock.Instance, persisted);
             pipe = new PipeServer(processor, config.Ipc, () => hostRef?.TickMs ?? 1000, msg => logger.Log(msg));
         }
 
@@ -191,7 +196,8 @@ public static class Program
             pipe,
             stateFile,
             logger,
-            isConsole);
+            isConsole,
+            afterReload: () => persisted.Apply(engine, rgb));
         hostRef = host;
 
         // Register shutdown handlers (Ctrl+C in console mode cancels the loop, which then shuts down)

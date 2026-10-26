@@ -21,16 +21,19 @@ public sealed class CommandProcessor
     private readonly IRgbControl _rgb;
     private readonly Func<IpcConfig> _ipcConfig;
     private readonly IClock _clock;
+    private readonly PersistedSettings? _persisted;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="CommandProcessor"/> class.
     /// </summary>
-    public CommandProcessor(IFanControl fans, IRgbControl rgb, Func<IpcConfig> ipcConfig, IClock clock)
+    /// <param name="persisted">Where Zero RPM toggles and brightness are saved; null = not saved.</param>
+    public CommandProcessor(IFanControl fans, IRgbControl rgb, Func<IpcConfig> ipcConfig, IClock clock, PersistedSettings? persisted = null)
     {
         _fans = fans;
         _rgb = rgb;
         _ipcConfig = ipcConfig;
         _clock = clock;
+        _persisted = persisted;
     }
 
     /// <summary>
@@ -108,6 +111,7 @@ public sealed class CommandProcessor
             "set" => HandleFanSet(tokens),
             "curve" => HandleFanCurve(tokens),
             "release" => HandleFanRelease(tokens),
+            "zerorpm" => HandleFanZeroRpm(tokens),
             _ => Error($"Unknown fan subcommand '{tokens[1]}'.")
         };
     }
@@ -240,6 +244,54 @@ public sealed class CommandProcessor
         {
             _fans.ClearOverride(fan);
             _fans.ClearCurveOverride(fan);
+        }
+
+        return Ok(null);
+    }
+
+    private string HandleFanZeroRpm(string[] tokens)
+    {
+        if (tokens.Length < 4)
+        {
+            return Error("Usage: fan zerorpm <fan|all> <on|off|default>");
+        }
+
+        bool? enabled = tokens[3].ToLowerInvariant() switch
+        {
+            "on" => true,
+            "off" => false,
+            "default" => null,
+            _ => throw new ArgumentException($"Zero RPM mode must be on, off or default, not '{tokens[3]}'.")
+        };
+
+        string target = tokens[2];
+        List<string> targetFans;
+        if (target.Equals("all", StringComparison.OrdinalIgnoreCase))
+        {
+            targetFans = _fans.FanNames.Where(_fans.SupportsZeroRpm).ToList();
+            if (targetFans.Count == 0)
+            {
+                return Error("No fan has a zeroRpm config.");
+            }
+        }
+        else
+        {
+            string? matched = _fans.FanNames.FirstOrDefault(f => f.Equals(target, StringComparison.OrdinalIgnoreCase));
+            if (matched == null)
+            {
+                return Error($"Unknown fan '{target}'.");
+            }
+            if (!_fans.SupportsZeroRpm(matched))
+            {
+                return Error($"Fan '{matched}' has no zeroRpm config.");
+            }
+            targetFans = [matched];
+        }
+
+        foreach (string fan in targetFans)
+        {
+            _fans.SetZeroRpm(fan, enabled);
+            _persisted?.SetZeroRpm(fan, enabled);
         }
 
         return Ok(null);
@@ -432,6 +484,7 @@ public sealed class CommandProcessor
         }
 
         _rgb.Brightness = brightness;
+        _persisted?.SetRgbBrightness(brightness);
         return Ok(null);
     }
 
@@ -536,7 +589,9 @@ public sealed class CommandProcessor
                 Rpm: s.Rpm.HasValue ? (int)Math.Round(s.Rpm.Value, MidpointRounding.AwayFromZero) : null,
                 Missing: s.SourceMissing,
                 Curve: s.Curve,
-                Override: ovr);
+                Override: ovr,
+                ZeroRpm: s.ZeroRpm,
+                Parked: s.Parked);
         }
 
         var rgbGroups = new Dictionary<string, RgbGroupStateDto>(StringComparer.OrdinalIgnoreCase);
@@ -611,7 +666,9 @@ public sealed record FanStateDto(
     [property: JsonPropertyName("rpm")] int? Rpm,
     [property: JsonPropertyName("missing")] bool Missing,
     [property: JsonPropertyName("curve")] string Curve,
-    [property: JsonPropertyName("override")] FanOverrideDto? Override);
+    [property: JsonPropertyName("override")] FanOverrideDto? Override,
+    [property: JsonPropertyName("zeroRpm")] bool? ZeroRpm,
+    [property: JsonPropertyName("parked")] bool Parked);
 
 /// <summary>Fan override state data transfer object.</summary>
 public sealed record FanOverrideDto(

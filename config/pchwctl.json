@@ -46,6 +46,38 @@
       "step": 5,
       "deadband": 5,
       "responseS": 1
+    },
+    "gpu-amd": {
+      "type": "graph",
+      "source": "sel:GpuAmd|Temperature|GPU Core",
+      "points": [
+        [40, 30],
+        [55, 65],
+        [60, 80],
+        [65, 90],
+        [70, 100]
+      ],
+      "hysteresisUp": 2,
+      "hysteresisDown": 2,
+      "responseUpS": 2,
+      "responseDownS": 2,
+      "ignoreHysteresisAtLimits": true
+    },
+    "gpu-nvidia": {
+      "type": "graph",
+      "source": "/gpu-nvidia/0/temperature/0",
+      "points": [
+        [40, 30],
+        [55, 65],
+        [60, 80],
+        [65, 90],
+        [70, 100]
+      ],
+      "hysteresisUp": 2,
+      "hysteresisDown": 2,
+      "responseUpS": 2,
+      "responseDownS": 2,
+      "ignoreHysteresisAtLimits": true
     }
   },
   "fans": {
@@ -96,6 +128,28 @@
       "minPct": 0,
       "floorPct": 100,
       "offset": 0
+    },
+    "gpu-amd": {
+      "control": "/gpu-amd/0/control/0",
+      "tach": "/gpu-amd/0/fan/0",
+      "curve": "gpu-amd",
+      "zeroRpm": {
+        "enabled": false,
+        "stopBelowC": 50,
+        "startAtC": 60,
+        "park": "zero"
+      }
+    },
+    "gpu-nvidia": {
+      "control": "/gpu-nvidia/0/control/1",
+      "tach": "/gpu-nvidia/0/fan/1",
+      "curve": "gpu-nvidia",
+      "zeroRpm": {
+        "enabled": false,
+        "stopBelowC": 50,
+        "startAtC": 60,
+        "park": "release"
+      }
     }
   },
   "rgb": {

@@ -49,6 +49,16 @@ public sealed class IpcFakeFanControl : IFanControl
     {
         ClearCurveOverrideCalls.Add(fan);
     }
+
+    public HashSet<string> ZeroRpmFans { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public List<(string Fan, bool? Enabled)> SetZeroRpmCalls { get; } = [];
+
+    public bool SupportsZeroRpm(string fan) => ZeroRpmFans.Contains(fan);
+
+    public void SetZeroRpm(string fan, bool? enabled)
+    {
+        SetZeroRpmCalls.Add((fan, enabled));
+    }
 }
 
 public sealed class IpcFakeRgbControl : IRgbControl
@@ -399,5 +409,75 @@ public class IpcTests
         var proc = CreateProcessor();
         string res = proc.Execute("subscribe");
         Assert.Equal("{\"ok\":true,\"data\":{\"subscribed\":true}}", res);
+    }
+
+    [Fact]
+    public void Test20_FanZeroRpmToggle()
+    {
+        // 20. fan zerorpm: on/off/default per fan, "all" only touches fans with a zeroRpm config,
+        //     fans without one and bad modes are rejected.
+        var fans = new IpcFakeFanControl();
+        fans.FansList.Add("gpu-amd");
+        fans.FansList.Add("gpu-nvidia");
+        fans.ZeroRpmFans.Add("gpu-amd");
+        fans.ZeroRpmFans.Add("gpu-nvidia");
+        var proc = CreateProcessor(fans);
+
+        Assert.Contains("\"ok\":true", proc.Execute("fan zerorpm gpu-amd off"));
+        Assert.Contains("\"ok\":true", proc.Execute("fan zerorpm GPU-NVIDIA on"));
+        Assert.Contains("\"ok\":true", proc.Execute("fan zerorpm gpu-amd default"));
+        Assert.Equal([("gpu-amd", (bool?)false), ("gpu-nvidia", true), ("gpu-amd", null)], fans.SetZeroRpmCalls);
+
+        fans.SetZeroRpmCalls.Clear();
+        Assert.Contains("\"ok\":true", proc.Execute("fan zerorpm all off"));
+        Assert.Equal([("gpu-amd", (bool?)false), ("gpu-nvidia", false)], fans.SetZeroRpmCalls);
+
+        Assert.Contains("no zeroRpm config", proc.Execute("fan zerorpm cpu-fans on"));
+        Assert.Contains("\"ok\":false", proc.Execute("fan zerorpm gpu-amd maybe"));
+        Assert.Contains("\"ok\":false", proc.Execute("fan zerorpm nope on"));
+        Assert.Equal(2, fans.SetZeroRpmCalls.Count); // rejected commands made no calls
+    }
+
+    [Fact]
+    public void Test21_PersistedSettings_SavedByCommands_ReloadedAndApplied()
+    {
+        // 21. zerorpm and brightness commands save to disk; a new instance reads them back and Apply pushes them
+        //     into the engines (skipping fans without zeroRpm). "default" forgets the fan. save:false never writes.
+        string path = Path.Combine(AppContext.BaseDirectory, $"settings-{Guid.NewGuid():N}.json");
+        try
+        {
+            var fans = new IpcFakeFanControl();
+            fans.FansList.Add("gpu-amd");
+            fans.FansList.Add("gpu-nvidia");
+            fans.ZeroRpmFans.Add("gpu-amd");
+            fans.ZeroRpmFans.Add("gpu-nvidia");
+            var rgb = new IpcFakeRgbControl();
+            var saved = new PersistedSettings(path, _ => { });
+            var proc = new CommandProcessor(fans, rgb, () => new IpcConfig(), new IpcFakeClock(), saved);
+
+            proc.Execute("fan zerorpm gpu-amd on");
+            proc.Execute("fan zerorpm gpu-nvidia off");
+            proc.Execute("fan zerorpm gpu-nvidia default");
+            proc.Execute("rgb brightness 40");
+
+            var reloaded = new PersistedSettings(path, _ => { });
+            Assert.Equal(new Dictionary<string, bool> { ["gpu-amd"] = true }, reloaded.ZeroRpm);
+            Assert.Equal(40f, reloaded.RgbBrightness);
+
+            var fresh = new IpcFakeFanControl();
+            fresh.ZeroRpmFans.Add("gpu-amd");
+            var freshRgb = new IpcFakeRgbControl();
+            reloaded.Apply(fresh, freshRgb);
+            Assert.Equal([("gpu-amd", (bool?)true)], fresh.SetZeroRpmCalls);
+            Assert.Equal(40f, freshRgb.Brightness);
+
+            var readOnly = new PersistedSettings(path, _ => { }, save: false);
+            readOnly.SetRgbBrightness(90);
+            Assert.Equal(40f, new PersistedSettings(path, _ => { }).RgbBrightness);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
     }
 }

@@ -62,6 +62,24 @@ public sealed class FanConfig
     public float MinPct { get; set; } = 0;
     public float FloorPct { get; set; } = 0;
     public float Offset { get; set; } = 0;
+
+    /// <summary>Optional: stop the fan below a temperature (GPU style). Null = fan never parks.</summary>
+    public ZeroRpmConfig? ZeroRpm { get; set; }
+}
+
+public sealed class ZeroRpmConfig
+{
+    public bool Enabled { get; set; } = true;
+
+    /// <summary>Park the fan when the curve temperature drops below this.</summary>
+    public float StopBelowC { get; set; } = 50;
+
+    /// <summary>Spin up again once the curve temperature reaches this. Must be above StopBelowC.</summary>
+    public float StartAtC { get; set; } = 60;
+
+    /// <summary>"zero" writes 0 %; "release" hands the fan back to the driver, whose own auto mode stops it at idle
+    /// (needed where manual 0 % is clamped, e.g. NVIDIA).</summary>
+    public string Park { get; set; } = "zero";
 }
 
 public sealed class ConfigException : Exception
@@ -268,6 +286,23 @@ public static class ConfigLoader
             if (fan.FloorPct < 0f || fan.FloorPct > 100f)
             {
                 errors.Add($"Fan '{name}' floorPct {fan.FloorPct} outside 0-100.");
+            }
+
+            if (fan.ZeroRpm is { } zr)
+            {
+                if (zr.StartAtC <= zr.StopBelowC)
+                {
+                    errors.Add($"Fan '{name}' zeroRpm startAtC {zr.StartAtC} must be above stopBelowC {zr.StopBelowC}.");
+                }
+                if (!string.Equals(zr.Park, "zero", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(zr.Park, "release", StringComparison.OrdinalIgnoreCase))
+                {
+                    errors.Add($"Fan '{name}' zeroRpm park '{zr.Park}' must be 'zero' or 'release'.");
+                }
+                if (fan.FloorPct > 0f)
+                {
+                    errors.Add($"Fan '{name}' has floorPct {fan.FloorPct}; zeroRpm would park below the floor.");
+                }
             }
         }
 

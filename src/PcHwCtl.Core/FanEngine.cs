@@ -12,7 +12,9 @@ public sealed record FanState(
     bool SourceMissing,
     OverrideInfo? Override,
     float? Rpm = null,
-    string Curve = "");
+    string Curve = "",
+    bool? ZeroRpm = null,
+    bool Parked = false);
 
 public sealed class FanEngine : IFanControl
 {
@@ -28,6 +30,12 @@ public sealed class FanEngine : IFanControl
         // IPC curve switch; its own state instance so the configured curve keeps its history.
         public string? OverrideCurveName { get; set; }
         public IFanCurve? OverrideCurve { get; set; }
+
+        // Zero RPM: IPC toggle (null = config), parked state, and whether parking handed the fan to the driver.
+        public bool? ZeroRpmOverride { get; set; }
+        public bool ZeroRpmArmed { get; set; }
+        public bool Parked { get; set; }
+        public bool Released { get; set; }
 
         public FanRuntime(string name, FanConfig config, IFanCurve curve)
         {
@@ -154,6 +162,27 @@ public sealed class FanEngine : IFanControl
         }
     }
 
+    public bool SupportsZeroRpm(string fan)
+    {
+        lock (_gate) return _fans.TryGetValue(fan, out var runtime) && runtime.Config.ZeroRpm != null;
+    }
+
+    public void SetZeroRpm(string fan, bool? enabled)
+    {
+        lock (_gate)
+        {
+            if (!_fans.TryGetValue(fan, out var runtime)) throw new ArgumentException($"Unknown fan '{fan}'.");
+            if (runtime.Config.ZeroRpm == null) throw new ArgumentException($"Fan '{fan}' has no zeroRpm config.");
+            runtime.ZeroRpmOverride = enabled;
+        }
+    }
+
+    private static bool ZeroRpmOn(FanRuntime fan) =>
+        fan.Config.ZeroRpm is { } zr && (fan.ZeroRpmOverride ?? zr.Enabled);
+
+    private static bool ParksByRelease(FanRuntime fan) =>
+        string.Equals(fan.Config.ZeroRpm?.Park, "release", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>Reads a sensor reference or virtual sensor the same way curves do. Used by RGB gradients.</summary>
     public bool TryReadSource(string reference, out float value)
     {
@@ -250,6 +279,7 @@ public sealed class FanEngine : IFanControl
                 fanRuntime.Config = newFanCfg;
                 fanRuntime.OverrideCurveName = null;
                 fanRuntime.OverrideCurve = null;
+                fanRuntime.ZeroRpmOverride = null;
             }
             else
             {
@@ -312,6 +342,8 @@ public sealed class FanEngine : IFanControl
 
                 target = 100f;
                 output = 100f;
+                fan.Parked = false;
+                fan.ZeroRpmArmed = false;
             }
             else
             {
@@ -327,6 +359,7 @@ public sealed class FanEngine : IFanControl
                 target = Math.Clamp(baseTarget, fan.Config.MinPct, 100f);
 
                 // 4. Override replaces step 3's target when active
+                bool overrideActive = false;
                 if (_overrides.TryGetValue(fanName, out var ov))
                 {
                     if (now >= ov.ExpiresAtUtc)
@@ -337,49 +370,80 @@ public sealed class FanEngine : IFanControl
                     else
                     {
                         target = ov.Pct;
+                        overrideActive = true;
                     }
                 }
 
-                // 5. target = max(target, floorPct)
-                target = Math.Max(target, fan.Config.FloorPct);
-
-                // 6. Start: if previous output == 0 and 0 < target < startPct, target = startPct
-                if (fan.PreviousOutput == 0f && target > 0f && target < fan.Config.StartPct)
+                // 4b. Zero RPM: park below stopBelowC, stay parked until startAtC. An explicit % override wins.
+                //     When Zero RPM just became active (startup, IPC toggle, override ended) anything below startAtC parks.
+                if (!overrideActive && temp.HasValue && ZeroRpmOn(fan))
                 {
-                    target = fan.Config.StartPct;
-                }
-
-                // 7. Step limit: change from previous output at most stepUp up / stepDown down per tick. First tick: no limit.
-                if (!fan.HasTicked)
-                {
-                    output = target;
+                    var zr = fan.Config.ZeroRpm!;
+                    bool justArmed = !fan.ZeroRpmArmed;
+                    fan.ZeroRpmArmed = true;
+                    fan.Parked = fan.Parked || justArmed ? temp.Value < zr.StartAtC : temp.Value < zr.StopBelowC;
                 }
                 else
                 {
-                    float prev = fan.PreviousOutput;
-                    if (target > prev)
+                    fan.ZeroRpmArmed = false;
+                    fan.Parked = false;
+                }
+
+                if (fan.Parked)
+                {
+                    target = 0f;
+                    output = 0f;
+                }
+                else
+                {
+                    // 5. target = max(target, floorPct)
+                    target = Math.Max(target, fan.Config.FloorPct);
+
+                    // 6. Start: if previous output == 0 and 0 < target < startPct, target = startPct
+                    if (fan.PreviousOutput == 0f && target > 0f && target < fan.Config.StartPct)
                     {
-                        output = Math.Min(target, prev + fan.Config.StepUp);
+                        target = fan.Config.StartPct;
                     }
-                    else if (target < prev)
+
+                    // 7. Step limit: change from previous output at most stepUp up / stepDown down per tick. First tick: no limit.
+                    if (!fan.HasTicked)
                     {
-                        output = Math.Max(target, prev - fan.Config.StepDown);
+                        output = target;
                     }
                     else
                     {
-                        output = target;
+                        float prev = fan.PreviousOutput;
+                        if (target > prev)
+                        {
+                            output = Math.Min(target, prev + fan.Config.StepUp);
+                        }
+                        else if (target < prev)
+                        {
+                            output = Math.Max(target, prev - fan.Config.StepDown);
+                        }
+                        else
+                        {
+                            output = target;
+                        }
                     }
                 }
             }
 
-            // 8. If output changed (or first tick): out.Set(control, value) unless dryRun
-            if (!fan.HasTicked || output != fan.PreviousOutput)
+            // 8. Write: parked-by-release hands the fan to the driver once; otherwise out.Set on change,
+            //    first tick, or when taking the fan back from the driver.
+            if (fan.Parked && ParksByRelease(fan))
+            {
+                if (!_dryRun) ReleaseControl(fan.Config.Control);
+                fan.Released = true;
+            }
+            else if (!fan.HasTicked || fan.Released || output != fan.PreviousOutput)
             {
                 if (!_dryRun)
                 {
                     _fanOutput.Set(fan.Config.Control, output);
                     _writtenControls.Add(fan.Config.Control);
                 }
+                fan.Released = false;
             }
 
             fan.PreviousOutput = output;
@@ -397,7 +461,8 @@ public sealed class FanEngine : IFanControl
                 rpm = rpmValue;
             }
 
-            _states[fanName] = new FanState(output, target, temp, isMissing, currentOverride, rpm, curveName);
+            bool? zeroRpm = fan.Config.ZeroRpm != null ? ZeroRpmOn(fan) : null;
+            _states[fanName] = new FanState(output, target, temp, isMissing, currentOverride, rpm, curveName, zeroRpm, fan.Parked);
         }
     }
 

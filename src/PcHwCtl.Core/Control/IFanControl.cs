@@ -10,4 +10,10 @@ public interface IFanControl
     void ClearOverride(string fan);
     void SetCurveOverride(string fan, string curve);
     void ClearCurveOverride(string fan);
+
+    /// <summary>True when the fan has a zeroRpm config block.</summary>
+    bool SupportsZeroRpm(string fan);
+
+    /// <summary>Turns Zero RPM on or off until the next config reload; null goes back to the configured setting.</summary>
+    void SetZeroRpm(string fan, bool? enabled);
 }

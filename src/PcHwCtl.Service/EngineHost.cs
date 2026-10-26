@@ -16,6 +16,7 @@ public sealed class EngineHost : IDisposable
     private readonly StateFileWriter? _stateFile;
     private readonly FileLogger _logger;
     private readonly bool _consoleOutput;
+    private readonly Action? _afterReload;
 
     private DateTime _lastConfigMtime;
     private DateTime _lastTickCompleted = DateTime.UtcNow;
@@ -35,7 +36,8 @@ public sealed class EngineHost : IDisposable
         PipeServer? pipe,
         StateFileWriter? stateFile,
         FileLogger logger,
-        bool consoleOutput)
+        bool consoleOutput,
+        Action? afterReload = null)
     {
         _configPath = configPath;
         _hardware = hardware;
@@ -45,6 +47,7 @@ public sealed class EngineHost : IDisposable
         _stateFile = stateFile;
         _logger = logger;
         _consoleOutput = consoleOutput;
+        _afterReload = afterReload;
         _tickMs = initialConfig.TickMs;
         _rgbFrameMs = 1000.0 / Math.Clamp(initialConfig.Rgb.Fps, 1, 60);
 
@@ -248,6 +251,7 @@ public sealed class EngineHost : IDisposable
                     _rgb?.ReplaceConfig(newConfig.Rgb);
                     _tickMs = newConfig.TickMs;
                     _rgbFrameMs = 1000.0 / Math.Clamp(newConfig.Rgb.Fps, 1, 60);
+                    _afterReload?.Invoke();
                     _logger.Log("Config successfully reloaded. Device and IPC settings apply after a restart.");
                 }
                 catch (ConfigException ex)

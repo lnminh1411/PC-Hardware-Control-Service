@@ -640,4 +640,133 @@ public class CoreTests
         Assert.Contains("/ctrl/1", fanOut.SetDefaultCalls);
         Assert.Contains("/ctrl/2", fanOut.SetDefaultCalls);
     }
+
+    private static (FanEngine Engine, FakeSensorSource Src, FakeFanOutput Out, FakeClock Clock) ZeroRpmRig(string park)
+    {
+        var cfg = new Config
+        {
+            Curves = { ["c"] = new CurveConfig { Type = "graph", Source = "/t", Points = [[40f, 30f], [70f, 100f]] } },
+            Fans =
+            {
+                ["gpu"] = new FanConfig
+                {
+                    Control = "/ctrl/gpu",
+                    Curve = "c",
+                    StepUp = 100,
+                    StepDown = 100,
+                    ZeroRpm = new ZeroRpmConfig { StopBelowC = 50, StartAtC = 60, Park = park }
+                }
+            }
+        };
+        var src = new FakeSensorSource();
+        var fanOut = new FakeFanOutput();
+        var clock = new FakeClock();
+        return (new FanEngine(cfg, src, fanOut, clock, _ => { }, false), src, fanOut, clock);
+    }
+
+    private static void TickAt(FanEngine engine, FakeSensorSource src, FakeClock clock, float temp)
+    {
+        src.Sensors["/t"] = temp;
+        engine.Tick();
+        clock.AdvanceSeconds(1);
+    }
+
+    [Fact]
+    public void Test15_ZeroRpmParkZero_Hysteresis()
+    {
+        // 15. park "zero": below stopBelowC writes 0 %, stays parked until startAtC, then follows the curve.
+        var (engine, src, fanOut, clock) = ZeroRpmRig("zero");
+
+        TickAt(engine, src, clock, 45);
+        Assert.Equal(("/ctrl/gpu", 0f), fanOut.SetCalls[^1]);
+        Assert.True(engine.States["gpu"].Parked);
+        Assert.True(engine.States["gpu"].ZeroRpm);
+
+        TickAt(engine, src, clock, 55); // between stop and start: still parked
+        Assert.True(engine.States["gpu"].Parked);
+        Assert.Single(fanOut.SetCalls);
+
+        TickAt(engine, src, clock, 61); // start: back on the curve
+        Assert.False(engine.States["gpu"].Parked);
+        Assert.Equal(79f, fanOut.SetCalls[^1].Percent, 1);
+
+        TickAt(engine, src, clock, 55); // above stop: keeps spinning
+        Assert.False(engine.States["gpu"].Parked);
+
+        TickAt(engine, src, clock, 49);
+        Assert.Equal(("/ctrl/gpu", 0f), fanOut.SetCalls[^1]);
+        Assert.Empty(fanOut.SetDefaultCalls);
+
+        // Starting inside the band (between stop and start) parks, as when Zero RPM is switched on.
+        var (fresh, freshSrc, _, freshClock) = ZeroRpmRig("zero");
+        TickAt(fresh, freshSrc, freshClock, 55);
+        Assert.True(fresh.States["gpu"].Parked);
+    }
+
+    [Fact]
+    public void Test16_ZeroRpmParkRelease_OverrideAndToggle()
+    {
+        // 16. park "release": parking hands the fan to the driver once (SetDefault), unparking writes the curve again.
+        //     A % override and the IPC toggle both keep the fan spinning.
+        var (engine, src, fanOut, clock) = ZeroRpmRig("release");
+
+        TickAt(engine, src, clock, 45); // never written yet: nothing to release
+        Assert.True(engine.States["gpu"].Parked);
+        Assert.Empty(fanOut.SetCalls);
+        Assert.Empty(fanOut.SetDefaultCalls);
+
+        TickAt(engine, src, clock, 61);
+        Assert.Equal(79f, fanOut.SetCalls[^1].Percent, 1);
+
+        TickAt(engine, src, clock, 45);
+        TickAt(engine, src, clock, 45);
+        Assert.Equal(["/ctrl/gpu"], fanOut.SetDefaultCalls);
+
+        TickAt(engine, src, clock, 61); // taken back from the driver
+        Assert.Equal(79f, fanOut.SetCalls[^1].Percent, 1);
+        Assert.Equal(2, fanOut.SetCalls.Count);
+
+        engine.SetOverride("gpu", 70, TimeSpan.FromMinutes(1));
+        TickAt(engine, src, clock, 45);
+        Assert.Equal(70f, fanOut.SetCalls[^1].Percent);
+        Assert.False(engine.States["gpu"].Parked);
+        engine.ClearOverride("gpu");
+
+        engine.SetZeroRpm("gpu", false);
+        TickAt(engine, src, clock, 45);
+        Assert.Equal(41.7f, fanOut.SetCalls[^1].Percent, 1);
+        Assert.False(engine.States["gpu"].ZeroRpm);
+
+        engine.SetZeroRpm("gpu", null);
+        TickAt(engine, src, clock, 45);
+        Assert.True(engine.States["gpu"].Parked);
+        Assert.Equal(2, fanOut.SetDefaultCalls.Count);
+
+        Assert.Throws<ArgumentException>(() => engine.SetZeroRpm("nope", true));
+    }
+
+    [Fact]
+    public void Test17_ZeroRpmValidation()
+    {
+        // 17. startAtC must exceed stopBelowC, park must be zero|release, and a floor cannot coexist with parking.
+        var cfg = new Config
+        {
+            Curves = { ["c"] = new CurveConfig { Type = "flat", Pct = 50 } },
+            Fans =
+            {
+                ["gpu"] = new FanConfig
+                {
+                    Control = "/ctrl/gpu",
+                    Curve = "c",
+                    FloorPct = 20,
+                    ZeroRpm = new ZeroRpmConfig { StopBelowC = 60, StartAtC = 50, Park = "spin" }
+                }
+            }
+        };
+
+        var ex = Assert.Throws<ConfigException>(() => ConfigLoader.Validate(cfg));
+        Assert.Contains(ex.Errors, e => e.Contains("startAtC"));
+        Assert.Contains(ex.Errors, e => e.Contains("'spin'"));
+        Assert.Contains(ex.Errors, e => e.Contains("floorPct"));
+    }
 }

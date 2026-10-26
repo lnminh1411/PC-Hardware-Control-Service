@@ -35,6 +35,8 @@ public sealed class StateFileWriter
             if (state.Rpm.HasValue) Add(sb, $"hw.{key}.rpm", state.Rpm.Value.ToString("0", CultureInfo.InvariantCulture));
             if (state.CurveTemp.HasValue) Add(sb, $"hw.{key}.temp", state.CurveTemp.Value.ToString("0.#", CultureInfo.InvariantCulture));
             if (state.Override != null) Add(sb, $"hw.{key}.ovr", "1");
+            if (state.ZeroRpm.HasValue) Add(sb, $"hw.{key}.zr", state.ZeroRpm.Value ? "1" : "0");
+            if (state.Parked) Add(sb, $"hw.{key}.park", "1");
         }
 
         if (mixTemp.HasValue) Add(sb, "hw.mix", mixTemp.Value.ToString("0.#", CultureInfo.InvariantCulture));
