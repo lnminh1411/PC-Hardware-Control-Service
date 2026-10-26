@@ -81,6 +81,8 @@ Decisions:
 - Project skeleton: `src/PcHwCtl` (service), `src/PcHwCtl.Cli` (console + debug), `config/pchwctl.json`.
 
 ### Phase 1: fans (replaces FanControl)
+Status 2026-10-26: built, 14 unit tests pass, `--list` and `--dry-run` verified on the live board. LHM 0.9.6 ids are `/lpc/it8696e/0/...`; the identifier matcher maps FanControl's form. A failed sensor read keeps the last good value for `staleSensorS` (5 s), then the fan goes to 100 %. Next: stop FanControl, run with writes, then install as service.
+
 - Sensor layer: LHM `Computer` (CPU, GPU, Motherboard on; storage off, like FanControl), poll 1 s.
 - Curve types: `graph` (linear interp + hysteresis + response time), `auto` (FanControl Auto algorithm), `flat`, `mix` sensor (max/min/avg), `manual`.
 - Output: step limit 8 %/tick, start %, min %, per-control enable.

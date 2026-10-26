@@ -1,0 +1,101 @@
+{
+  "tickMs": 1000,
+  "staleSensorS": 5,
+  "sensors": {
+    "mix": {
+      "type": "mix",
+      "fn": "max",
+      "sources": [
+        "sel:GpuAmd|Temperature|GPU Core",
+        "/lpc/it8696e/temperature/4",
+        "/lpc/it8696e/temperature/5",
+        "/gpu-nvidia/0/temperature/0",
+        "/intelcpu/0/temperature/1"
+      ],
+      "allowMissing": false
+    }
+  },
+  "curves": {
+    "graph": {
+      "type": "graph",
+      "source": "mix",
+      "points": [
+        [52.47, 20.06],
+        [60.21, 38.72],
+        [65, 80],
+        [75, 90],
+        [80, 100]
+      ],
+      "hysteresisUp": 2,
+      "hysteresisDown": 2,
+      "responseUpS": 2,
+      "responseDownS": 2,
+      "ignoreHysteresisAtLimits": true
+    },
+    "flat": {
+      "type": "flat",
+      "pct": 100
+    },
+    "auto": {
+      "type": "auto",
+      "source": "/intelcpu/0/temperature/22",
+      "idleTemp": 45,
+      "loadTemp": 75,
+      "minPct": 50,
+      "maxPct": 100,
+      "step": 5,
+      "deadband": 5,
+      "responseS": 1
+    }
+  },
+  "fans": {
+    "cpu-fans": {
+      "control": "/lpc/it8696e/control/0",
+      "tach": "/lpc/it8696e/fan/0",
+      "curve": "auto",
+      "enabled": true,
+      "stepUp": 8,
+      "stepDown": 8,
+      "startPct": 0,
+      "minPct": 0,
+      "floorPct": 50,
+      "offset": 0
+    },
+    "rear-fan": {
+      "control": "/lpc/it8696e/control/1",
+      "tach": "/lpc/it8696e/fan/1",
+      "curve": "graph",
+      "enabled": true,
+      "stepUp": 8,
+      "stepDown": 8,
+      "startPct": 0,
+      "minPct": 0,
+      "floorPct": 0,
+      "offset": 0
+    },
+    "front-fans": {
+      "control": "/lpc/it8696e/control/2",
+      "tach": "/lpc/it8696e/fan/2",
+      "curve": "graph",
+      "enabled": true,
+      "stepUp": 8,
+      "stepDown": 8,
+      "startPct": 32,
+      "minPct": 0,
+      "floorPct": 0,
+      "offset": 0
+    },
+    "water-pump": {
+      "control": "/lpc/it8696e/control/4",
+      "tach": "/lpc/it8696e/fan/4",
+      "curve": "flat",
+      "enabled": true,
+      "stepUp": 8,
+      "stepDown": 8,
+      "startPct": 0,
+      "minPct": 0,
+      "floorPct": 100,
+      "offset": 0
+    }
+  }
+}

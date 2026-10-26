@@ -6,7 +6,7 @@ Windows service that replaces FanControl and OpenRGB on my PC, with a local IPC 
 
 ## Status
 
-Planning. See [Plan.md](Plan.md) for current setup, architecture, phases and open questions.
+Phase 1 (fans) built and verified in dry run against the live board; not yet driving hardware. See [Plan.md](Plan.md) for setup, architecture and phases.
 
 ## Scope
 
