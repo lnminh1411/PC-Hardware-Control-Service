@@ -40,6 +40,8 @@ public sealed class CommandProcessor
     {
         try
         {
+            // Clients that write with a BOM-emitting UTF-8 encoder prefix the first line with U+FEFF.
+            line = line?.TrimStart('﻿') ?? "";
             if (string.IsNullOrWhiteSpace(line))
             {
                 return Error("Empty command.");

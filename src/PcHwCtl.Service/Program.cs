@@ -3,6 +3,10 @@ using System.Security.Principal;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using PcHwCtl.Core;
+using PcHwCtl.Core.Ipc;
+using PcHwCtl.Core.Rgb;
+using PcHwCtl.Service.Devices;
+using PcHwCtl.Service.Ipc;
 
 namespace PcHwCtl.Service;
 
@@ -16,6 +20,19 @@ public static class Program
         string? configPath = null;
         string? importIn = null;
         string? importOut = null;
+
+        // pchwctl ipc <command...>: talk to the running service (pipe ACL decides access).
+        if (args.Length > 0 && string.Equals(args[0], "ipc", StringComparison.OrdinalIgnoreCase))
+        {
+            if (args.Length < 2)
+            {
+                Console.Error.WriteLine("Usage: pchwctl ipc <command>   e.g. pchwctl ipc \"get state\"");
+                return 1;
+            }
+            using var ipcCts = new CancellationTokenSource();
+            Console.CancelKeyPress += (_, e) => { e.Cancel = true; ipcCts.Cancel(); };
+            return await PipeClient.RunAsync("PcHwCtl", string.Join(' ', args.Skip(1)), Console.Out, ipcCts.Token);
+        }
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -149,13 +166,33 @@ public static class Program
             msg => logger.Log(msg),
             isDryRun);
 
+        // RGB: dry-run computes frames but never opens the controllers.
+        List<ILedDevice> devices = isDryRun ? [] : DeviceFactory.Create(config.Devices, msg => logger.Log(msg));
+        var rgb = new RgbEngine(config.Rgb, devices, reference => ReadRgbSource(engine, reference), SystemClock.Instance, msg => logger.Log(msg));
+
+        PipeServer? pipe = null;
+        EngineHost? hostRef = null;
+        if (config.Ipc.Enabled)
+        {
+            var processor = new CommandProcessor(engine, rgb, () => config.Ipc, SystemClock.Instance);
+            pipe = new PipeServer(processor, config.Ipc, () => hostRef?.TickMs ?? 1000, msg => logger.Log(msg));
+        }
+
+        var stateFile = new StateFileWriter(
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "PcHwCtl", "state.txt"),
+            msg => logger.Log(msg));
+
         var host = new EngineHost(
             config,
             effectiveConfigPath,
             hardware,
             engine,
+            rgb,
+            pipe,
+            stateFile,
             logger,
             isConsole);
+        hostRef = host;
 
         // Register shutdown handlers (Ctrl+C in console mode cancels the loop, which then shuts down)
         AppDomain.CurrentDomain.ProcessExit += (_, _) =>
@@ -197,6 +234,25 @@ public static class Program
             await builder.Build().RunAsync();
             return 0;
         }
+    }
+
+    /// <summary>RGB gradient input: "fan:&lt;name&gt;.rpm|pct" from fan state, anything else as a curve source.</summary>
+    private static float? ReadRgbSource(FanEngine engine, string reference)
+    {
+        if (reference.StartsWith("fan:", StringComparison.OrdinalIgnoreCase))
+        {
+            string spec = reference[4..];
+            int dot = spec.LastIndexOf('.');
+            if (dot <= 0 || !engine.States.TryGetValue(spec[..dot], out var state)) return null;
+            return spec[(dot + 1)..].ToLowerInvariant() switch
+            {
+                "rpm" => state.Rpm,
+                "pct" => state.CurrentPct,
+                _ => null
+            };
+        }
+
+        return engine.TryReadSource(reference, out float value) ? value : null;
     }
 
     private static bool IsAdministrator()

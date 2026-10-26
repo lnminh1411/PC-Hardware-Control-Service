@@ -95,6 +95,8 @@ Status 2026-10-26: built, 14 unit tests pass, `--list` and `--dry-run` verified 
 - Test: run side by side in read-only mode vs FanControl, compare computed % per tick. Then stop FanControl, switch to write.
 
 ### Phase 2: RGB, motherboard (replaces OpenRGB part 1)
+Status 2026-10-26 (phases 2-5): built from clean-room notes in `docs/protocols/`. Unit-tested with fakes; IPC, state file and RGB frames verified in dry run. Live IT5711/ENE writes not run yet (OpenRGB still owns the devices). ENE remap walks all 8 DIMM slots. ESP32 side: board state via `@source hw file:///C:/ProgramData/PcHwCtl/state.txt 1000` in stats.ini (no code); commands need a `!hw` handler in ESP32PcStats that forwards to the pipe.
+
 - IT5711 HID driver: init, LED count per header (24 on D_LED1..3), direct per-LED mode, 12V strip, mobo zones. Byte order from calibration (D_LED GRB, Mainboard BGR).
 - Rule engine: `gradient(source, stops)` same as Hardware Sync, 10 fps, plus static color, off, effects (breathing, rainbow) as software frames.
 - Test vs OpenRGB screenshots for each zone, then remove OpenRGB autostart.

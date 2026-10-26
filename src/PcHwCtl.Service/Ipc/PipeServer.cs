@@ -275,16 +275,18 @@ public sealed class PipeServer : IDisposable
     {
         var security = new PipeSecurity();
 
+        // SYSTEM and Administrators get FullControl: creating the 2nd..4th pipe instance needs
+        // CreateNewInstance, and the server runs as one of them. Clients only need ReadWrite.
         var sidSystem = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
         security.AddAccessRule(new PipeAccessRule(
             sidSystem,
-            PipeAccessRights.ReadWrite,
+            PipeAccessRights.FullControl,
             AccessControlType.Allow));
 
         var sidAdmin = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
         security.AddAccessRule(new PipeAccessRule(
             sidAdmin,
-            PipeAccessRights.ReadWrite,
+            PipeAccessRights.FullControl,
             AccessControlType.Allow));
 
         if (!string.IsNullOrWhiteSpace(_cfg.AllowAccount))

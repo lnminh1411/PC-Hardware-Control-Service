@@ -271,6 +271,9 @@ public static class ConfigLoader
             }
         }
 
+        // 4. RGB groups and rules
+        errors.AddRange(RgbConfigValidator.Validate(config.Rgb, config));
+
         if (errors.Count > 0)
         {
             throw new ConfigException(string.Join(Environment.NewLine, errors), errors);

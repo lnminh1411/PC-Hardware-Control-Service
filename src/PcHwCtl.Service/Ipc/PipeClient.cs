@@ -52,7 +52,7 @@ public static class PipeClient
                 return 2;
             }
 
-            var writer = new StreamWriter(client, Encoding.UTF8, bufferSize: 1024, leaveOpen: true)
+            var writer = new StreamWriter(client, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), bufferSize: 1024, leaveOpen: true)
             {
                 NewLine = "\n"
             };

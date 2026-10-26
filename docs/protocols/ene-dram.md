@@ -43,11 +43,13 @@ After a full power loss every ENE stick answers at `0x77`. They must be moved to
 For this PC the targets are fixed: `0x71`, `0x73` (what OpenRGB chose; `0x70` and `0x72` are taken by other devices).
 
 1. For each target T: if T passes the identity check, it is ready.
-2. For each target T still missing, in order, with slot counter s starting at 0:
-   - stop if `0x77` does not pass the identity check;
+2. Walk DIMM slots s = 0..7 with T = the first target still missing:
+   - stop if `0x77` does not pass the identity check (nothing left to move);
    - stop if T answers a quick write (address busy);
-   - write `0x80F8 = s` and `0x80F9 = T << 1` to device `0x77`; wait 20 ms; s++;
-   - T must now pass the identity check, else log and stop.
+   - write `0x80F8 = s` and `0x80F9 = T << 1` to device `0x77`; wait 20 ms;
+   - if T now passes the identity check, the stick in slot s moved: T is ready, move on to the next target. Otherwise slot s is empty: keep T for the next slot.
+
+Only the stick in slot s reacts to the address write, so an empty slot moves nothing. Dual-channel boards fill slots 1 and 3, so slot 0 is usually empty.
 
 Only `0x77` and the configured targets are ever written. Probing is quick write to those same addresses only.
 

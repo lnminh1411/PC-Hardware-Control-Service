@@ -1,4 +1,6 @@
 using PcHwCtl.Core;
+using PcHwCtl.Core.Rgb;
+using PcHwCtl.Service.Ipc;
 
 namespace PcHwCtl.Service;
 
@@ -7,6 +9,9 @@ public sealed class EngineHost : IDisposable
     private readonly string _configPath;
     private readonly LhmHardware _hardware;
     private readonly FanEngine _engine;
+    private readonly RgbEngine? _rgb;
+    private readonly PipeServer? _pipe;
+    private readonly StateFileWriter? _stateFile;
     private readonly FileLogger _logger;
     private readonly bool _consoleOutput;
 
@@ -15,6 +20,7 @@ public sealed class EngineHost : IDisposable
     private volatile bool _stopped;
     private int _shutdownRan;
     private int _tickMs;
+    private int _rgbFrameMs;
     private int _consecutiveFailures;
     private const int MaxConsecutiveFailures = 5;
 
@@ -23,15 +29,22 @@ public sealed class EngineHost : IDisposable
         string configPath,
         LhmHardware hardware,
         FanEngine engine,
+        RgbEngine? rgb,
+        PipeServer? pipe,
+        StateFileWriter? stateFile,
         FileLogger logger,
         bool consoleOutput)
     {
         _configPath = configPath;
         _hardware = hardware;
         _engine = engine;
+        _rgb = rgb;
+        _pipe = pipe;
+        _stateFile = stateFile;
         _logger = logger;
         _consoleOutput = consoleOutput;
         _tickMs = initialConfig.TickMs;
+        _rgbFrameMs = 1000 / Math.Clamp(initialConfig.Rgb.Fps, 1, 60);
 
         try
         {
@@ -42,6 +55,8 @@ public sealed class EngineHost : IDisposable
             _lastConfigMtime = DateTime.UtcNow;
         }
     }
+
+    public int TickMs => _tickMs;
 
     public void StartWatchdog()
     {
@@ -69,12 +84,26 @@ public sealed class EngineHost : IDisposable
     public async Task RunAsync(CancellationToken cancellationToken)
     {
         StartWatchdog();
+        _pipe?.Start();
+        Task rgbLoop = _rgb != null ? Task.Run(() => RgbLoopAsync(cancellationToken)) : Task.CompletedTask;
 
         _logger.Log("PcHwCtl engine started.");
 
+        DateTime lastTickStart = DateTime.UtcNow;
         while (!cancellationToken.IsCancellationRequested && !_stopped)
         {
             DateTime tickStart = DateTime.UtcNow;
+
+            // A gap far longer than the tick period means the PC slept: the board may have
+            // dropped PWM and RGB state, so write everything again.
+            if ((tickStart - lastTickStart).TotalMilliseconds > _tickMs * 3 + 2000)
+            {
+                _logger.Log($"Resume detected ({(tickStart - lastTickStart).TotalSeconds:0} s gap), rewriting fans and RGB.");
+                _engine.ForceRewrite();
+                _rgb?.InvalidateAll();
+            }
+            lastTickStart = tickStart;
+
             try
             {
                 // 1. Config hot reload
@@ -101,7 +130,14 @@ public sealed class EngineHost : IDisposable
             // 4. Update last tick completed for watchdog
             _lastTickCompleted = DateTime.UtcNow;
 
-            // 5. Console status line in console mode
+            // 5. State file for ESP32PcStats
+            if (_stateFile != null)
+            {
+                float? mix = _engine.TryReadSource("mix", out float mixValue) ? mixValue : null;
+                _stateFile.Write(_engine, _rgb, mix);
+            }
+
+            // 6. Console status line in console mode
             if (_consoleOutput)
             {
                 var fanStatus = _engine.States.Select(kv =>
@@ -109,9 +145,14 @@ public sealed class EngineHost : IDisposable
                     string tempStr = kv.Value.CurveTemp.HasValue
                         ? $"{kv.Value.CurveTemp.Value:0.#}C"
                         : "N/A";
-                    return $"{kv.Key}={kv.Value.CurrentPct:0.#}%@{tempStr}";
+                    string rpmStr = kv.Value.Rpm.HasValue ? $" {kv.Value.Rpm.Value:0}rpm" : "";
+                    return $"{kv.Key}={kv.Value.CurrentPct:0.#}%@{tempStr}{rpmStr}";
                 });
                 string line = string.Join(" ", fanStatus);
+                if (_rgb != null)
+                {
+                    line += " | rgb " + string.Join(" ", _rgb.DeviceStatus.Select(kv => $"{kv.Key}={kv.Value}"));
+                }
                 if (!string.IsNullOrEmpty(line))
                 {
                     _logger.Log(line);
@@ -130,7 +171,44 @@ public sealed class EngineHost : IDisposable
             }
         }
 
+        _stopped = true;
+        try
+        {
+            await rgbLoop;
+        }
+        catch (Exception ex)
+        {
+            _logger.Log($"RGB loop ended with error: {ex.Message}");
+        }
+
         ShutdownAll();
+    }
+
+    private async Task RgbLoopAsync(CancellationToken cancellationToken)
+    {
+        while (!cancellationToken.IsCancellationRequested && !_stopped)
+        {
+            DateTime frameStart = DateTime.UtcNow;
+            try
+            {
+                _rgb!.Tick();
+            }
+            catch (Exception ex)
+            {
+                // RgbEngine handles device faults itself; anything here is a bug, keep the fans running.
+                _logger.Log($"RGB frame failed: {ex.Message}");
+            }
+
+            int remaining = _rgbFrameMs - (int)(DateTime.UtcNow - frameStart).TotalMilliseconds;
+            try
+            {
+                await Task.Delay(Math.Max(remaining, 10), cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+        }
     }
 
     private void CheckConfigReload()
@@ -149,8 +227,10 @@ public sealed class EngineHost : IDisposable
                 {
                     Config newConfig = ConfigLoader.Load(_configPath);
                     _engine.ReplaceConfig(newConfig);
+                    _rgb?.ReplaceConfig(newConfig.Rgb);
                     _tickMs = newConfig.TickMs;
-                    _logger.Log("Config successfully reloaded.");
+                    _rgbFrameMs = 1000 / Math.Clamp(newConfig.Rgb.Fps, 1, 60);
+                    _logger.Log("Config successfully reloaded. Device and IPC settings apply after a restart.");
                 }
                 catch (ConfigException ex)
                 {
@@ -171,6 +251,7 @@ public sealed class EngineHost : IDisposable
             _stopped = true;
             _logger.Log("Shutdown initiated.");
 
+            // Fans first: they are the part that must reach a safe state.
             try
             {
                 _engine.Shutdown();
@@ -178,6 +259,32 @@ public sealed class EngineHost : IDisposable
             catch (Exception ex)
             {
                 _logger.Log($"Error during engine shutdown: {ex.Message}");
+            }
+
+            try
+            {
+                _pipe?.Stop();
+            }
+            catch (Exception ex)
+            {
+                _logger.Log($"Error stopping IPC: {ex.Message}");
+            }
+
+            // A hung RGB device must not keep the process alive (watchdog path), so give it 2 s.
+            if (_rgb != null)
+            {
+                var rgbShutdown = Task.Run(_rgb.Shutdown);
+                try
+                {
+                    if (!rgbShutdown.Wait(TimeSpan.FromSeconds(2)))
+                    {
+                        _logger.Log("RGB shutdown timed out after 2 s.");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.Log($"Error during RGB shutdown: {ex.InnerException?.Message ?? ex.Message}");
+                }
             }
 
             try
