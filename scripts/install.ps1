@@ -68,7 +68,7 @@ if (-not (Test-Path -LiteralPath $publishDir)) {
 
 if (-not (Test-Path -LiteralPath $InstallDir)) {
     Write-Host "Creating install directory: $InstallDir"
-    New-Item -ItemType Directory -LiteralPath $InstallDir -Force | Out-Null
+    New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 }
 
 Write-Host "Copying files from $publishDir to $InstallDir..."
@@ -77,7 +77,7 @@ Copy-Item -Path (Join-Path $publishDir "*") -Destination $InstallDir -Recurse -F
 # 4. Config: copy config\pchwctl.json to C:\ProgramData\PcHwCtl\pchwctl.json
 if (-not (Test-Path -LiteralPath $DataDir)) {
     Write-Host "Creating data directory: $DataDir"
-    New-Item -ItemType Directory -LiteralPath $DataDir -Force | Out-Null
+    New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
 }
 
 $targetConfigExists = Test-Path -LiteralPath $TargetConfigFile
