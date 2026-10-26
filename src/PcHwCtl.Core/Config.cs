@@ -1,3 +1,4 @@
+using PcHwCtl.Core.Rgb;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -10,6 +11,9 @@ public sealed class Config
     public Dictionary<string, SensorConfig> Sensors { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, CurveConfig> Curves { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, FanConfig> Fans { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public RgbConfig Rgb { get; set; } = new();
+    public DevicesConfig Devices { get; set; } = new();
+    public IpcConfig Ipc { get; set; } = new();
 }
 
 public sealed class SensorConfig

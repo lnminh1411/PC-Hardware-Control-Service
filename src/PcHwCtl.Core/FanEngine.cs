@@ -1,3 +1,4 @@
+using PcHwCtl.Core.Control;
 using System.Text.Json;
 
 namespace PcHwCtl.Core;
@@ -9,9 +10,11 @@ public sealed record FanState(
     float TargetPct,
     float? CurveTemp,
     bool SourceMissing,
-    OverrideInfo? Override);
+    OverrideInfo? Override,
+    float? Rpm = null,
+    string Curve = "");
 
-public sealed class FanEngine
+public sealed class FanEngine : IFanControl
 {
     private sealed class FanRuntime
     {
@@ -21,6 +24,10 @@ public sealed class FanEngine
         public float PreviousOutput { get; set; }
         public bool HasTicked { get; set; }
         public bool WasMissing { get; set; }
+
+        // IPC curve switch; its own state instance so the configured curve keeps its history.
+        public string? OverrideCurveName { get; set; }
+        public IFanCurve? OverrideCurve { get; set; }
 
         public FanRuntime(string name, FanConfig config, IFanCurve curve)
         {
@@ -114,6 +121,59 @@ public sealed class FanEngine
         throw new InvalidOperationException($"Unknown curve type '{cfg.Type}'.");
     }
 
+    public IReadOnlyCollection<string> FanNames
+    {
+        get { lock (_gate) return _fans.Keys.ToList(); }
+    }
+
+    public bool HasCurve(string curve)
+    {
+        lock (_gate) return _config.Curves.ContainsKey(curve);
+    }
+
+    public void SetCurveOverride(string fan, string curve)
+    {
+        lock (_gate)
+        {
+            if (!_fans.TryGetValue(fan, out var runtime)) throw new ArgumentException($"Unknown fan '{fan}'.");
+            if (!_config.Curves.TryGetValue(curve, out var curveCfg)) throw new ArgumentException($"Unknown curve '{curve}'.");
+            runtime.OverrideCurveName = curve;
+            runtime.OverrideCurve = CreateCurve(curveCfg);
+        }
+    }
+
+    public void ClearCurveOverride(string fan)
+    {
+        lock (_gate)
+        {
+            if (_fans.TryGetValue(fan, out var runtime))
+            {
+                runtime.OverrideCurveName = null;
+                runtime.OverrideCurve = null;
+            }
+        }
+    }
+
+    /// <summary>Reads a sensor reference or virtual sensor the same way curves do. Used by RGB gradients.</summary>
+    public bool TryReadSource(string reference, out float value)
+    {
+        lock (_gate)
+        {
+            float? v = ReadSource(reference, _clock.UtcNow, out bool missing);
+            value = v ?? 0f;
+            return !missing && v.HasValue;
+        }
+    }
+
+    /// <summary>After resume: next tick rewrites every fan even if the value did not change.</summary>
+    public void ForceRewrite()
+    {
+        lock (_gate)
+        {
+            foreach (var fan in _fans.Values) fan.HasTicked = false;
+        }
+    }
+
     public void SetOverride(string fan, float pct, TimeSpan ttl)
     {
         lock (_gate) _overrides[fan] = new OverrideInfo(pct, _clock.UtcNow + ttl);
@@ -188,6 +248,8 @@ public sealed class FanEngine
                     fanRuntime.HasTicked = false;
                 }
                 fanRuntime.Config = newFanCfg;
+                fanRuntime.OverrideCurveName = null;
+                fanRuntime.OverrideCurve = null;
             }
             else
             {
@@ -226,78 +288,15 @@ public sealed class FanEngine
         {
             if (!fan.Config.Enabled) continue;
 
-            if (!_config.Curves.TryGetValue(fan.Config.Curve, out var curveCfg))
+            string curveName = fan.OverrideCurveName ?? fan.Config.Curve;
+            IFanCurve curve = fan.OverrideCurve ?? fan.Curve;
+            if (!_config.Curves.TryGetValue(curveName, out var curveCfg))
             {
                 continue;
             }
 
             string? sourceRef = curveCfg.Source;
-            bool isMissing = false;
-            float? temp = null;
-
-            // 1. Read curve source
-            if (!string.IsNullOrEmpty(sourceRef))
-            {
-                if (_config.Sensors.TryGetValue(sourceRef, out var sensorCfg) &&
-                    string.Equals(sensorCfg.Type, "mix", StringComparison.OrdinalIgnoreCase))
-                {
-                    // Virtual mix sensor
-                    var validValues = new List<float>();
-                    bool anyMissing = false;
-
-                    foreach (var src in sensorCfg.Sources)
-                    {
-                        if (TryReadWithStale(src, now, out float val))
-                        {
-                            validValues.Add(val);
-                        }
-                        else
-                        {
-                            anyMissing = true;
-                            if (!sensorCfg.AllowMissing)
-                            {
-                                break;
-                            }
-                        }
-                    }
-
-                    if (!sensorCfg.AllowMissing && anyMissing)
-                    {
-                        isMissing = true;
-                    }
-                    else if (validValues.Count == 0)
-                    {
-                        isMissing = true;
-                    }
-                    else
-                    {
-                        if (string.Equals(sensorCfg.Fn, "min", StringComparison.OrdinalIgnoreCase))
-                        {
-                            temp = validValues.Min();
-                        }
-                        else if (string.Equals(sensorCfg.Fn, "avg", StringComparison.OrdinalIgnoreCase))
-                        {
-                            temp = validValues.Average();
-                        }
-                        else
-                        {
-                            temp = validValues.Max();
-                        }
-                    }
-                }
-                else
-                {
-                    // Direct sensor reference
-                    if (TryReadWithStale(sourceRef, now, out float val))
-                    {
-                        temp = val;
-                    }
-                    else
-                    {
-                        isMissing = true;
-                    }
-                }
-            }
+            float? temp = ReadSource(sourceRef, now, out bool isMissing);
 
             float target;
             float output;
@@ -323,7 +322,7 @@ public sealed class FanEngine
                 }
 
                 // 3. Else target = curve pct + offset, clamp to [minPct, 100]
-                float? curvePct = fan.Curve.Evaluate(temp, now);
+                float? curvePct = curve.Evaluate(temp, now);
                 float baseTarget = (curvePct ?? 100f) + fan.Config.Offset;
                 target = Math.Clamp(baseTarget, fan.Config.MinPct, 100f);
 
@@ -392,8 +391,86 @@ public sealed class FanEngine
                 currentOverride = activeOv;
             }
 
-            _states[fanName] = new FanState(output, target, temp, isMissing, currentOverride);
+            float? rpm = null;
+            if (!string.IsNullOrEmpty(fan.Config.Tach) && _sensorSource.TryRead(fan.Config.Tach, out float rpmValue))
+            {
+                rpm = rpmValue;
+            }
+
+            _states[fanName] = new FanState(output, target, temp, isMissing, currentOverride, rpm, curveName);
         }
+    }
+
+    private float? ReadSource(string? sourceRef, DateTime now, out bool isMissing)
+    {
+        isMissing = false;
+        float? temp = null;
+
+        if (!string.IsNullOrEmpty(sourceRef))
+        {
+            if (_config.Sensors.TryGetValue(sourceRef, out var sensorCfg) &&
+                string.Equals(sensorCfg.Type, "mix", StringComparison.OrdinalIgnoreCase))
+            {
+                // Virtual mix sensor
+                var validValues = new List<float>();
+                bool anyMissing = false;
+
+                foreach (var src in sensorCfg.Sources)
+                {
+                    if (TryReadWithStale(src, now, out float val))
+                    {
+                        validValues.Add(val);
+                    }
+                    else
+                    {
+                        anyMissing = true;
+                        if (!sensorCfg.AllowMissing)
+                        {
+                            break;
+                        }
+                    }
+                }
+
+                if (!sensorCfg.AllowMissing && anyMissing)
+                {
+                    isMissing = true;
+                }
+                else if (validValues.Count == 0)
+                {
+                    isMissing = true;
+                }
+                else
+                {
+                    if (string.Equals(sensorCfg.Fn, "min", StringComparison.OrdinalIgnoreCase))
+                    {
+                        temp = validValues.Min();
+                    }
+                    else if (string.Equals(sensorCfg.Fn, "avg", StringComparison.OrdinalIgnoreCase))
+                    {
+                        temp = validValues.Average();
+                    }
+                    else
+                    {
+                        temp = validValues.Max();
+                    }
+                }
+            }
+            else
+            {
+                // Direct sensor reference
+                if (TryReadWithStale(sourceRef, now, out float val))
+                {
+                    temp = val;
+                }
+                else
+                {
+                    isMissing = true;
+                }
+            }
+        }
+
+
+        return temp;
     }
 
     private bool TryReadWithStale(string reference, DateTime now, out float value)

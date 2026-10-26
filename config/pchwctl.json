@@ -97,5 +97,109 @@
       "floorPct": 100,
       "offset": 0
     }
+  },
+  "rgb": {
+    "fps": 10,
+    "brightness": 100,
+    "groups": {
+      "main": {
+        "zones": [
+          "it5711/*"
+        ],
+        "rule": {
+          "type": "gradient",
+          "source": "mix",
+          "smoothingS": 2,
+          "stops": [
+            {
+              "at": 62.4,
+              "color": "#FFCB80"
+            },
+            {
+              "at": 63.2,
+              "color": "#E6A817"
+            },
+            {
+              "at": 64.5,
+              "color": "#E6A817"
+            },
+            {
+              "at": 68.9,
+              "color": "#DC3737"
+            }
+          ]
+        }
+      },
+      "ram": {
+        "zones": [
+          "ene-0x71/*",
+          "ene-0x73/*"
+        ],
+        "rule": {
+          "type": "gradient",
+          "source": "mix",
+          "smoothingS": 2,
+          "stops": [
+            {
+              "at": 62.4,
+              "color": "#FFFFFF"
+            },
+            {
+              "at": 63.2,
+              "color": "#E6D22E"
+            },
+            {
+              "at": 64.5,
+              "color": "#E6D22E"
+            },
+            {
+              "at": 68.9,
+              "color": "#DC456E"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "devices": {
+    "it5711": {
+      "enabled": true,
+      "argb": {
+        "ARGB_V2_1": {
+          "header": 1,
+          "leds": 24
+        },
+        "ARGB_V2_2": {
+          "header": 2,
+          "leds": 24
+        },
+        "ARGB_V2_3": {
+          "header": 3,
+          "leds": 24
+        }
+      },
+      "single": {
+        "12V": 4,
+        "Accent": 2
+      },
+      "fallbackByteOrder": "GRB"
+    },
+    "ene": {
+      "enabled": true,
+      "addresses": [
+        "0x71",
+        "0x73"
+      ],
+      "expectedName": "AUDA0-E6K5-0101",
+      "remap": true,
+      "pawnIoLibPath": "C:\\Program Files\\PawnIO\\PawnIOLib.dll"
+    }
+  },
+  "ipc": {
+    "enabled": true,
+    "pipeName": "PcHwCtl",
+    "overrideTtlS": 60,
+    "maxTtlS": 3600,
+    "allowAccount": "NT AUTHORITY\\LocalService"
   }
 }
