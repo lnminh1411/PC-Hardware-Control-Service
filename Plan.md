@@ -28,9 +28,7 @@ Curves:
 - **Auto**: source `/intelcpu/0/temperature/22`, idle 45 °C at 50 %, load 75 °C at 100 %, step 5, deadband 5, response 1 s.
 - **Flat**: 100 %.
 
-Found issue: FanSensor nicknames swapped. `fan/0` named "Water Pump", `fan/4` named "CPU Fan", but calibration says control/0+fan/0 = CPU (1923 rpm), control/4+fan/4 = pump (2961 rpm). New config uses control names.
-
-To verify: FanControl `SelectedMixFunction 1` meaning (Max vs Average). Check in FanControl UI before porting. `ADLX/...` id is a FanControl plugin; LHM name for same sensor is `/gpu-amd/0/temperature/...`, map at import.
+Confirmed by owner: FanSensor nicknames are correct. `SelectedMixFunction 1` = Max. Control-to-curve assignment ports unchanged, keyed by control id. `ADLX/...` id is a FanControl plugin; LHM name for same sensor is `/gpu-amd/0/temperature/...`, map at import.
 
 ### OpenRGB (`%APPDATA%\OpenRGB`)
 - Hardware Sync plugin (`plugins\settings\MeasureSettings.json`), both auto-start, 10 fps, 100 ms refresh, source `/lpc/it8696e/0/fan/2` (Front Fans rpm), color gradient between stops:
@@ -42,7 +40,16 @@ To verify: FanControl `SelectedMixFunction 1` meaning (Max vs Average). Check in
 
   (OpenRGB stores 0x00BBGGRR; decoded above.)
 - SDK server autostart on `0.0.0.0:6742`. Profile `Default.orp`: Direct mode, per-LED.
-- Hardware Fan Sync plugin enabled, no settings file found. Probably unused (FanControl drives fans).
+- Hardware Fan Sync plugin: only bridged Mix temp to LEDs through front fan rpm, because OpenRGB cannot read a mixed sensor. Not needed now: gradients read Mix temp directly. Stops translated rpm -> front fan % (calibration) -> Mix temp (Graph curve):
+
+| rpm stop | front % | Mix temp |
+|---|---|---|
+| 1400 | 57.5 | 62.4 °C |
+| 1500 | 64.3 | 63.2 °C |
+| 1650 | 75.6 | 64.5 °C |
+| 1750 | 83.9 | 68.9 °C |
+
+  Colors packed in 62-69 °C because the Graph curve is steep there. The fan ramp (8 %/tick, 2 s response) used to smooth color changes, so the gradient source gets the same smoothing (EMA, configurable).
 - Scheduler plugin disabled.
 
 ### ESP32 link (already exists)
@@ -62,8 +69,9 @@ ESP32 board --USB HID--> ESP32PcStats --named pipe--> PcHwCtl service
 Decisions:
 - **Separate service, pipe link to ESP32PcStats.** ESP32PcStats keeps owning HID. It forwards `!fan` / `!rgb` lines to the pipe and streams fan state back as `@s` keys. Keeps one HID owner, no firmware transport change.
 - **LHM directly** (NuGet `LibreHardwareMonitorLib`, PawnIO driver version). Same sensor ids as FanControl, so config imports 1:1. LHM takes global ISA/SMBus mutexes, so it coexists with ESP32PcStats reads.
-- **RGB native, no OpenRGB.** Port only the 2 needed protocols from OpenRGB source (GPL-2, reference only): `RGBFusion2USBController` (HID feature reports, report id `0xCC`) and `ENESMBusController`.
-- **Language**: C# .NET 8, single-file, `Microsoft.Extensions.Hosting.WindowsServices`. Runs as LocalSystem (driver + HID access).
+- **RGB native, no OpenRGB at all.** OpenRGB source is `GPL-2.0-only` (checked at running commit `0fca93e4`), which cannot be combined with this AGPL-3.0 repo. So no code is copied or translated. Protocol facts (register addresses, packet layouts) go into `docs/protocols/*.md` in our own words; code is written from those docs only. USB/SMBus captures from the running OpenRGB are a second, independent source.
+- **SMBus path**: the PC already runs the PawnIO kernel driver; OpenRGB 1.0rc2 drives i801 SMBus through PawnIO module `SmbusI801.bin`. Same driver + module, loaded via `PawnIOLib.dll` (PawnIO project, not OpenRGB).
+- **Language**: C# .NET 10 (latest GA; move to .NET 11 at its GA, Nov 2026), `Microsoft.Extensions.Hosting.WindowsServices`, LHM `LibreHardwareMonitorLib` 0.9.6 (PawnIO). Runs as LocalSystem (driver + HID access).
 
 ## 3. Phases
 
@@ -92,7 +100,7 @@ Decisions:
 ### Phase 3: RGB, DRAM
 - ENE over SMBus i801 through PawnIO SMBus module (same driver LHM uses).
 - Risk: wrong SMBus write can hit SPD hub. Hard allow-list: writes only to `0x71`, `0x73`, only after ENE id check (`AUDA0-E6K5-0101`). No address scan.
-- Fallback if blocked: keep OpenRGB headless (`--server --noautoconnect`) for DRAM only, drive it via SDK client.
+- No OpenRGB fallback (owner decision). If blocked, DRAM stays unlit until fixed.
 
 ### Phase 4: IPC
 Named pipe `\\.\pipe\PcHwCtl`, JSON lines, ACL: SYSTEM + Administrators + ESP32PcStats account.
@@ -111,7 +119,7 @@ Named pipe `\\.\pipe\PcHwCtl`, JSON lines, ACL: SYSTEM + Administrators + ESP32P
 
 Board side (in ESP32 repo, separate task): ESP32PcStats forwards `!fan ...` / `!rgb ...` with nonce + ack like `!power`. Streams `fan.<name>.rpm`, `fan.<name>.pct`, `rgb.profile` as `@s`/`@t` keys. Firmware adds a face/buttons for profile switch.
 
-Optional later: LAN TCP/WebSocket with token so board talks over Wi-Fi when USB stack is down. Also optional OpenRGB SDK server shim on 6742 if some other app needs it (nothing found that does).
+Optional later: LAN TCP/WebSocket with token so board talks over Wi-Fi when USB stack is down.
 
 ### Phase 5: service + tooling
 - `install.ps1` / `uninstall.ps1` (same style as pc_stats): service `PcHwCtl`, auto start, restart on failure x3.

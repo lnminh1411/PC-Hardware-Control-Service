@@ -16,4 +16,4 @@ Planning. See [Plan.md](Plan.md) for current setup, architecture, phases and ope
 
 ## License
 
-[AGPL-3.0](LICENSE). RGB protocol code is ported from [OpenRGB](https://gitlab.com/CalcProgrammer1/OpenRGB) (GPL-2.0-or-later, used here under GPL-3.0, which AGPL-3.0 section 13 allows combining with).
+[AGPL-3.0](LICENSE). [OpenRGB](https://gitlab.com/CalcProgrammer1/OpenRGB) is GPL-2.0-only, so no OpenRGB code is used here. RGB drivers are written from protocol notes in `docs/protocols/`.
