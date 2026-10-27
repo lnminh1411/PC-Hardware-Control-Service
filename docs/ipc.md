@@ -132,9 +132,9 @@ A copy of Power saver, created on this PC (GUID `3ceb8c3b-ac62-40f4-96ea-7268c04
 
 | Setting | Value | Why |
 |---|---|---|
-| Maximum processor state (E-cores, P-cores via class 1, class 2) | 5 % | ~450 MHz, the chip's floor; 1 % and 0 % give the same |
-| Core parking max/min cores (all 20) | 50 % | 10 of 20 awake, Windows picks which and moves them |
-| Core parking min cores, P-cores (class 1) | 0 % | Windows may park P-cores too |
+| Maximum processor state (E-cores, P-cores via class 1, class 2) | 30 % | caps the clock; 5 % (~450 MHz, the chip's floor) was too slow to use |
+| Minimum processor state (E-cores, P-cores via class 1) | 5 % | lets idle cores drop to the floor |
+| Core parking max/min cores (all 20, and P-cores via class 1) | 100 % | no parking; it saved little next to the cap |
 | Heterogeneous policy / class-1 thread thresholds / latency hint min unparked | 0 / 254 / 50 | Balanced's values. Power saver's (4 / 255 / 0) keep every P-core parked, which starves the PC |
 | PCIe link state power management | Maximum power savings | needs native ASPM on in the BIOS |
 | Sleep / hibernate | never | the board's timers decide |
@@ -145,7 +145,7 @@ Lessons:
 - Windows applies a processor cap only on a plan switch. Editing the cap into the active High performance plan did nothing, so the caps need a plan of their own.
 - The plain parking setting counts all 20 cores, not one core type.
 - Max cores 0 % for both core types, with the 5 % cap, made the PC unusable (fixed in Safe Mode).
-- At 6 of 20 cores awake and 450 MHz, PcHwCtl missed its fan tick and its watchdog restarted it. That led to the dedicated fan thread below.
+- With parking at 6 of 20 cores awake and a 5 % cap (~450 MHz), PcHwCtl missed its fan tick and its watchdog restarted it. That led to the dedicated fan thread below.
 
 ### Fan tick priority
 

@@ -93,7 +93,7 @@ public sealed class EngineHost : IDisposable
 
     /// <summary>
     /// The fan loop runs on its own thread at Highest priority, not on the thread pool: on a slow or crowded CPU
-    /// (night plan at ~450 MHz, parked cores) pool threads busy with sensor reads and pipe clients made it miss
+    /// (the first night plan: ~450 MHz, parked cores) pool threads busy with sensor reads and pipe clients made it miss
     /// the watchdog. Completes when the loop has stopped and everything is shut down.
     /// </summary>
     public Task RunAsync(CancellationToken cancellationToken)

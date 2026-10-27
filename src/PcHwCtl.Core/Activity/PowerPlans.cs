@@ -1,8 +1,8 @@
 namespace PcHwCtl.Core.Activity;
 
 /// <summary>
-/// Windows power plans for the board's night mode: "night" is a plan with the CPU capped at 5 % (~450 MHz), core
-/// parking (10 of 20 cores awake) and PCIe ASPM at maximum savings; "day" goes back to the normal plan. Plans are
+/// Windows power plans for the board's night mode: "night" is a plan with the CPU capped at 30 % (min 5 %), no core
+/// parking and PCIe ASPM at maximum savings; "day" goes back to the normal plan. Plans are
 /// named or given by GUID. Windows only applies a processor cap on a plan switch, so the caps live in their own
 /// plan instead of being edited into the active one.
 /// </summary>

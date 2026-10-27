@@ -4,8 +4,8 @@ using System.Runtime.InteropServices;
 namespace PcHwCtl.Service;
 
 /// <summary>
-/// The fans need their 1 s tick even when the CPU is slow or crowded (the night plan runs at ~450 MHz, and parked
-/// cores leave few to share): High priority class, and opted out of Windows efficiency mode so nothing (Windows, a
+/// The fans need their 1 s tick even when the CPU is slow or crowded (the first night plan ran at ~450 MHz, and its parked
+/// cores left few to share): High priority class, and opted out of Windows efficiency mode so nothing (Windows, a
 /// night `eco on`) throttles it. Heavy work inside drops to below normal per thread (RGB, background CPU sensor read).
 /// </summary>
 public static class ProcessPriority
