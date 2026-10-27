@@ -16,4 +16,4 @@ All phases built: fans, IT5711 and ENE DRAM RGB, named-pipe IPC, install scripts
 
 ## License
 
-[AGPL-3.0](LICENSE). [OpenRGB](https://gitlab.com/CalcProgrammer1/OpenRGB) is GPL-2.0-only, so no OpenRGB code is used here. RGB drivers are written from protocol notes in `docs/protocols/`.
+[AGPL-3.0](LICENSE).
