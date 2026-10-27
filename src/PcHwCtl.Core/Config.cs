@@ -1,6 +1,7 @@
 using PcHwCtl.Core.Display;
 using PcHwCtl.Core.Lasso;
 using PcHwCtl.Core.Rgb;
+using PcHwCtl.Core.Sensors;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -18,6 +19,7 @@ public sealed class Config
     public IpcConfig Ipc { get; set; } = new();
     public DisplaysConfig Displays { get; set; } = new();
     public LassoConfig Lasso { get; set; } = new();
+    public FeedConfig Feed { get; set; } = new();
 }
 
 public sealed class SensorConfig
@@ -342,7 +344,28 @@ public static class ConfigLoader
             errors.Add("Lasso ini path is empty.");
         }
 
-        // 6. Displays
+        // 6. Sensor feed
+        if (config.Feed.IntervalMs is < 100 or > 10_000)
+        {
+            errors.Add($"Feed intervalMs {config.Feed.IntervalMs} must be 100-10000.");
+        }
+        foreach (var (key, spec) in config.Feed.Keys)
+        {
+            if (key.Length is 0 or > 23 || key.Any(c => !(c is >= 'a' and <= 'z' or >= '0' and <= '9' or '_' or '.')))
+            {
+                errors.Add($"Sensor key '{key}' must be 1-23 of a-z 0-9 _ . (the board's key rule).");
+            }
+            try
+            {
+                SensorRule.Parse(key, spec);
+            }
+            catch (FormatException ex)
+            {
+                errors.Add(ex.Message);
+            }
+        }
+
+        // 7. Displays
         if (config.Displays.PollS < 1)
         {
             errors.Add($"Displays pollS {config.Displays.PollS} must be at least 1.");

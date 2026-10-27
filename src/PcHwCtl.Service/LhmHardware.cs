@@ -12,6 +12,8 @@ public sealed class LhmHardware : ISensorSource, IFanOutput, IDisposable
     private Dictionary<string, ISensor> _sensorsById = new(StringComparer.OrdinalIgnoreCase);
     private List<(IHardware Hardware, ISensor Sensor)> _allSensors = [];
     private readonly Dictionary<string, ISensor> _resolutionCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _unresolved = new(StringComparer.OrdinalIgnoreCase);
+    private volatile bool _hardwareChanged;
 
     public LhmHardware()
     {
@@ -20,13 +22,40 @@ public sealed class LhmHardware : ISensorSource, IFanOutput, IDisposable
             IsCpuEnabled = true,
             IsGpuEnabled = true,
             IsMotherboardEnabled = true,
-            IsMemoryEnabled = false,
+            IsMemoryEnabled = true, // DIMM SPD temperatures for the sensor feed (ram_temp), ~1.3 ms per stick
             IsStorageEnabled = false,
             IsNetworkEnabled = false,
             IsControllerEnabled = false
         };
         _computer.Open();
+        _computer.HardwareAdded += _ => _hardwareChanged = true;
+        _computer.HardwareRemoved += _ => _hardwareChanged = true;
         Refresh();
+    }
+
+    public IComputer Computer => _computer;
+
+    /// <summary>True once after hardware was added or removed since the last call.</summary>
+    public bool TakeHardwareChanged()
+    {
+        if (!_hardwareChanged) return false;
+        _hardwareChanged = false;
+        return true;
+    }
+
+    /// <summary>Some sensor reference (a fan source, a tach) matched nothing at its last lookup.</summary>
+    public bool HasUnresolved
+    {
+        get
+        {
+            lock (_gate) return _unresolved.Count > 0;
+        }
+    }
+
+    /// <summary>Hardware holding a sensor something has looked up: what a partial refresh must update.</summary>
+    public IReadOnlyCollection<IHardware> ResolvedHardware()
+    {
+        lock (_gate) return _resolutionCache.Values.Select(s => s.Hardware).Distinct().ToList();
     }
 
     public void Refresh()
@@ -127,6 +156,11 @@ public sealed class LhmHardware : ISensorSource, IFanOutput, IDisposable
         if (resolved != null)
         {
             _resolutionCache[reference] = resolved;
+            _unresolved.Remove(reference);
+        }
+        else
+        {
+            _unresolved.Add(reference);
         }
 
         return resolved;

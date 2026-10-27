@@ -6,10 +6,12 @@ using PcHwCtl.Core;
 using PcHwCtl.Core.Display;
 using PcHwCtl.Core.Ipc;
 using PcHwCtl.Core.Rgb;
+using PcHwCtl.Core.Sensors;
 using PcHwCtl.Service.Devices;
 using PcHwCtl.Service.Display;
 using PcHwCtl.Service.Lasso;
 using PcHwCtl.Service.Ipc;
+using PcHwCtl.Service.Sensors;
 
 namespace PcHwCtl.Service;
 
@@ -230,12 +232,23 @@ public static class Program
             lasso.Start();
         }
 
+        // Sensor feed: from here on the only LibreHardwareMonitor updater (split loop, see FeedConfig); fans and RGB
+        // read what it leaves, and ESP32-Helper subscribes instead of running its own reader.
+        SensorFeedHub? sensorHub = null;
+        SensorLoop? sensorLoop = null;
+        if (config.Feed.Enabled)
+        {
+            sensorHub = new SensorFeedHub();
+            sensorLoop = new SensorLoop(hardware, () => config.Feed, sensorHub, msg => logger.Log(msg));
+            sensorLoop.Start();
+        }
+
         PipeServer? pipe = null;
         EngineHost? hostRef = null;
         if (config.Ipc.Enabled)
         {
-            var processor = new CommandProcessor(engine, rgb, () => config.Ipc, SystemClock.Instance, persisted, displays, lasso);
-            pipe = new PipeServer(processor, config.Ipc, () => hostRef?.TickMs ?? 1000, msg => logger.Log(msg));
+            var processor = new CommandProcessor(engine, rgb, () => config.Ipc, SystemClock.Instance, persisted, displays, lasso, sensorHub);
+            pipe = new PipeServer(processor, config.Ipc, () => hostRef?.TickMs ?? 1000, msg => logger.Log(msg), sensorHub);
         }
 
         var stateFile = new StateFileWriter(
@@ -252,12 +265,14 @@ public static class Program
             stateFile,
             logger,
             isConsole,
-            afterReload: () => persisted.Apply(engine, rgb));
+            afterReload: () => persisted.Apply(engine, rgb),
+            refreshHardware: sensorLoop == null);
         hostRef = host;
 
         // Register shutdown handlers (Ctrl+C in console mode cancels the loop, which then shuts down)
         AppDomain.CurrentDomain.ProcessExit += (_, _) =>
         {
+            sensorLoop?.Dispose();
             host.ShutdownAll();
             displayCts.Cancel();
             displayLauncher?.Dispose();

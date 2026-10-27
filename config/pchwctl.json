@@ -273,6 +273,12 @@
       }
     }
   },
+  "feed": {
+    "enabled": true,
+    "intervalMs": 500,
+    "resolveS": 30,
+    "every": { "Cpu": 1000, "Memory": 1000 }
+  },
   "lasso": {
     "enabled": true,
     "ini": "C:\\ProgramData\\ProcessLasso\\config\\prolasso.ini",

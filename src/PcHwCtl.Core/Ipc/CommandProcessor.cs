@@ -5,6 +5,7 @@ using PcHwCtl.Core.Control;
 using PcHwCtl.Core.Display;
 using PcHwCtl.Core.Lasso;
 using PcHwCtl.Core.Rgb;
+using PcHwCtl.Core.Sensors;
 
 namespace PcHwCtl.Core.Ipc;
 
@@ -26,16 +27,18 @@ public sealed class CommandProcessor
     private readonly PersistedSettings? _persisted;
     private readonly IDisplayControl? _displays;
     private readonly ILassoControl? _lasso;
+    private readonly SensorFeedHub? _sensors;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="CommandProcessor"/> class.
     /// </summary>
     /// <param name="persisted">Where Zero RPM toggles and brightness are saved; null = not saved.</param>
     /// <param name="displays">Monitor control; null = display commands report it is off.</param>
-    public CommandProcessor(IFanControl fans, IRgbControl rgb, Func<IpcConfig> ipcConfig, IClock clock, PersistedSettings? persisted = null, IDisplayControl? displays = null, ILassoControl? lasso = null)
+    public CommandProcessor(IFanControl fans, IRgbControl rgb, Func<IpcConfig> ipcConfig, IClock clock, PersistedSettings? persisted = null, IDisplayControl? displays = null, ILassoControl? lasso = null, SensorFeedHub? sensors = null)
     {
         _displays = displays;
         _lasso = lasso;
+        _sensors = sensors;
         _fans = fans;
         _rgb = rgb;
         _ipcConfig = ipcConfig;
@@ -67,7 +70,7 @@ public sealed class CommandProcessor
             return verb switch
             {
                 "ping" => Ok(new { pong = true }),
-                "subscribe" => Ok(new { subscribed = true }),
+                "subscribe" => HandleSubscribe(tokens),
                 "get" => HandleGet(tokens),
                 "fan" => HandleFan(tokens),
                 "rgb" => HandleRgb(tokens),
@@ -95,6 +98,17 @@ public sealed class CommandProcessor
         return JsonSerializer.Serialize(state, JsonOptions);
     }
 
+    /// <summary>"subscribe": get state JSON each tick. "subscribe sensors": key=value snapshots (PipeServer streams both).</summary>
+    private string HandleSubscribe(string[] tokens)
+    {
+        if (tokens.Length == 1) return Ok(new { subscribed = true });
+        if (tokens.Length == 2 && tokens[1].Equals("sensors", StringComparison.OrdinalIgnoreCase))
+        {
+            return _sensors == null ? Error("Sensor feed is off (config feed.enabled).") : Ok(new { subscribed = "sensors" });
+        }
+        return Error("Usage: subscribe [sensors]");
+    }
+
     private string HandleGet(string[] tokens)
     {
         if (tokens.Length < 2)
@@ -105,6 +119,18 @@ public sealed class CommandProcessor
         if (tokens[1].Equals("state", StringComparison.OrdinalIgnoreCase))
         {
             return $"{{\"ok\":true,\"data\":{StateJson()}}}";
+        }
+
+        if (tokens[1].Equals("sensors", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_sensors == null) return Error("Sensor feed is off (config feed.enabled).");
+            if (_sensors.Latest is not { } s) return Error("No sensor snapshot yet.");
+            return Ok(new
+            {
+                seq = s.Seq,
+                ts = s.UnixMs,
+                values = s.Values.ToDictionary(kv => kv.Key, kv => kv.Value is double v ? (double?)Math.Round(v, 2) : null)
+            });
         }
 
         return Error($"Unknown get target '{tokens[1]}'.");

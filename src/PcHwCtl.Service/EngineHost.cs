@@ -17,6 +17,7 @@ public sealed class EngineHost : IDisposable
     private readonly FileLogger _logger;
     private readonly bool _consoleOutput;
     private readonly Action? _afterReload;
+    private readonly bool _refreshHardware;
 
     private DateTime _lastConfigMtime;
     private DateTime _lastTickCompleted = DateTime.UtcNow;
@@ -37,8 +38,10 @@ public sealed class EngineHost : IDisposable
         StateFileWriter? stateFile,
         FileLogger logger,
         bool consoleOutput,
-        Action? afterReload = null)
+        Action? afterReload = null,
+        bool refreshHardware = true)
     {
+        _refreshHardware = refreshHardware;
         _configPath = configPath;
         _hardware = hardware;
         _engine = engine;
@@ -116,8 +119,8 @@ public sealed class EngineHost : IDisposable
                 // 1. Config hot reload
                 CheckConfigReload();
 
-                // 2. Hardware refresh
-                _hardware.Refresh();
+                // 2. Hardware refresh, unless the sensor loop keeps the values fresh
+                if (_refreshHardware) _hardware.Refresh();
 
                 // 3. Engine tick
                 _engine.Tick();

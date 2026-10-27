@@ -35,6 +35,8 @@ Names are case-insensitive. `<fan>` = a fan key from config or `all`. `<group>` 
 | `lasso save <profile>` | copies prolasso.ini to `lasso.profilesDir\<profile>.ini`. Names only (letters, digits, `_ . -`), never paths |
 | `lasso load <profile>` | the profile replaces prolasso.ini; running processes follow its rules, names whose rule went away get every CPU |
 | `lasso profiles` | saved profile names |
+| `get sensors` | latest sensor feed snapshot as JSON: `{seq, ts, values: {cpu_temp: 41.8, gpu1_fan: null, ...}}` |
+| `subscribe sensors` | after the ack line, the server pushes every sensor feed snapshot as text, see [Sensor feed](#sensor-feed) |
 | `subscribe` | after the ack line, the server pushes one `get state` style line per tick until the client disconnects |
 
 ## State
@@ -65,6 +67,40 @@ Names are case-insensitive. `<fan>` = a fan key from config or `all`. `<group>` 
 ## Displays
 
 Monitor control runs in a user-session agent the service starts itself ([protocols/ddc-ci.md](protocols/ddc-ci.md)). `get state` carries `"displays": { "status": null, "monitors": [...] }`; `status` says why when the agent is not reachable. State file: `hw.mon.count`, `hw.mon.<n>.name|main|bright|power`, the keys of the board's old `mon.*` feed under `hw.`.
+
+## Sensor feed
+
+PcHwCtl is the only LibreHardwareMonitor reader on the PC: ESP32-Helper subscribes instead of reading its own. Config `feed`:
+
+- `intervalMs` 500.
+- `every` {Cpu: 1000, Memory: 1000}.
+- `resolveS` 30.
+- `keys`: key -> `"hardware | sensor type | sensor name [| first|avg|sum|max|min]"`, the helper's stats.ini syntax. The defaults are the handoff's 21 keys: cpu_temp, cpu_power, cpu_fan, sys_fan, vrm_temp, ram_temp, gpu1_*/gpu2_* (temp, fan, clock, load, vram, vramt, power) and igpu_load.
+
+Refresh, the same split loop as the helper:
+
+- Every `intervalMs`, only the hardware the feed, fans and RGB read is updated, in parallel.
+- Hardware matched by `every` updates in the background at most that often; no tick waits for it. The CPU update costs ~320 ms.
+- A full update and sensor lookup runs at start, on hardware change, and every `resolveS` while some key or fan source matches nothing.
+
+Measured 2026-10-27: a tick waits ~94 ms (125 ms max); the background CPU update takes ~323 ms. The fan engine keeps its own 1 s tick and reads the values the loop leaves.
+
+After `subscribe sensors` and its JSON ack, each snapshot is a block of text lines ended by an empty line:
+
+```
+seq=33
+ts=1793110234999
+cpu_temp=41.8
+gpu1_fan=790
+gpu2_power=13.34
+igpu_load=
+<empty line>
+```
+
+- `seq` counts up by one per snapshot. `ts` is Unix ms.
+- Every configured key is always present; `key=` with no value means missing (no sensor, or no reading).
+- The first block arrives right after the ack, then one per `intervalMs`. A slow reader gets the newest block, never a backlog.
+- No block for 3 s means the feed is stale. The reader shows the keys as missing and reconnects.
 
 ## Process Lasso
 

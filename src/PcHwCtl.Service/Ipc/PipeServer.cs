@@ -5,6 +5,7 @@ using System.Security.Principal;
 using System.Text;
 using PcHwCtl.Core.Ipc;
 using PcHwCtl.Core.Rgb;
+using PcHwCtl.Core.Sensors;
 
 namespace PcHwCtl.Service.Ipc;
 
@@ -20,6 +21,7 @@ public sealed class PipeServer : IDisposable
     private readonly IpcConfig _cfg;
     private readonly Func<int> _tickMs;
     private readonly Action<string> _log;
+    private readonly SensorFeedHub? _sensors;
 
     private readonly SemaphoreSlim _concurrencySemaphore = new(MaxClients, MaxClients);
     private readonly ConcurrentDictionary<Task, bool> _activeTasks = new();
@@ -30,8 +32,9 @@ public sealed class PipeServer : IDisposable
     /// <summary>
     /// Initializes a new instance of the <see cref="PipeServer"/> class.
     /// </summary>
-    public PipeServer(CommandProcessor processor, IpcConfig cfg, Func<int> tickMs, Action<string> log)
+    public PipeServer(CommandProcessor processor, IpcConfig cfg, Func<int> tickMs, Action<string> log, SensorFeedHub? sensors = null)
     {
+        _sensors = sensors;
         _processor = processor;
         _cfg = cfg;
         _tickMs = tickMs;
@@ -216,7 +219,9 @@ public sealed class PipeServer : IDisposable
                             string[] tokens = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
                             if (tokens.Length > 0 && tokens[0].Equals("subscribe", StringComparison.OrdinalIgnoreCase))
                             {
-                                await StreamSubscribeLoopAsync(pipe, ct);
+                                if (!response.StartsWith("{\"ok\":true", StringComparison.Ordinal)) continue;
+                                if (tokens.Length == 2 && _sensors != null) await StreamSensorsAsync(pipe, _sensors, ct);
+                                else await StreamSubscribeLoopAsync(pipe, ct);
                                 return;
                             }
                         }
@@ -243,6 +248,20 @@ public sealed class PipeServer : IDisposable
             {
                 _log($"PipeServer: client exception: {ex.Message}");
             }
+        }
+    }
+
+    /// <summary>The latest snapshot at once, then each new one as the sensor loop publishes it.</summary>
+    private static async Task StreamSensorsAsync(NamedPipeServerStream pipe, SensorFeedHub hub, CancellationToken ct)
+    {
+        long seq = 0;
+        while (!ct.IsCancellationRequested && pipe.IsConnected)
+        {
+            var snapshot = await hub.NextAsync(seq, ct);
+            seq = snapshot.Seq;
+            byte[] bytes = Encoding.UTF8.GetBytes(snapshot.ToText());
+            await pipe.WriteAsync(bytes, 0, bytes.Length, ct);
+            await pipe.FlushAsync(ct);
         }
     }
 
