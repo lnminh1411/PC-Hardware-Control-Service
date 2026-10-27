@@ -5,8 +5,9 @@ using System.Text.RegularExpressions;
 namespace PcHwCtl.Core.Lasso;
 
 /// <summary>
-/// Process Lasso control for the board: affinity rules in prolasso.ini (applied to running processes at once) and
-/// whole-config profiles to save and load. Policy such as night mode lives on the board; see
+/// Process Lasso control for the board: affinity rules in prolasso.ini (applied to running processes at once),
+/// whole-config profiles to save and load, and Windows efficiency mode (EcoQoS) per exe. Policy such as night mode
+/// lives on the board; see
 /// docs/protocols/process-lasso.md.
 /// </summary>
 public sealed class LassoConfig
@@ -17,8 +18,8 @@ public sealed class LassoConfig
     /// <summary>Where `lasso save|load &lt;name&gt;` keep profiles, as &lt;name&gt;.ini.</summary>
     public string ProfilesDir { get; set; } = @"C:\ProgramData\PcHwCtl\lasso";
 
-    /// <summary>How often `powercfg /requests` is read for display-required power requests (a video playing).</summary>
-    public int DisplayRequestPollS { get; set; } = 10;
+    /// <summary>How often new instances of exes in efficiency mode are looked for.</summary>
+    public int EcoSweepS { get; set; } = 10;
 }
 
 public sealed class LassoException(string message) : Exception(message);
@@ -26,8 +27,9 @@ public sealed class LassoException(string message) : Exception(message);
 /// <param name="Changed">Running processes whose affinity changed.</param>
 public sealed record LassoResult(string Message, int Changed);
 
-/// <param name="DisplayRequest">1 while some process holds a display-required power request, 0 none, -1 unknown.</param>
-public sealed record LassoState(int Rules, int DisplayRequest, string DisplayRequestBy);
+/// <param name="Rules">DefaultAffinitiesEx rules in the ini; -1 = ini not readable.</param>
+/// <param name="Eco">Exes held in efficiency mode.</param>
+public sealed record LassoState(int Rules, IReadOnlyList<string> Eco);
 
 public interface ILassoControl
 {
@@ -43,6 +45,15 @@ public interface ILassoControl
     LassoResult Load(string profile);
     LassoResult Save(string profile);
     IReadOnlyList<string> Profiles();
+
+    /// <summary>
+    /// Efficiency mode (EcoQoS: low clocks, E-cores preferred) on every instance of exe, now and for instances that
+    /// start later; off gives each process back the setting it had. Memory only: gone on service restart.
+    /// </summary>
+    LassoResult Eco(string exe, bool on);
+
+    /// <summary>Efficiency mode off for every exe it was put on.</summary>
+    LassoResult EcoOffAll();
 }
 
 /// <summary>prolasso.ini text handling. The file is UTF-16 LE with a BOM.</summary>

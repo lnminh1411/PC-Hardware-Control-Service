@@ -3,7 +3,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using PcHwCtl.Core.Control;
 using PcHwCtl.Core.Display;
-using PcHwCtl.Core.Lasso;
+using PcHwCtl.Core.Activity;
 
 namespace PcHwCtl.Service;
 
@@ -30,8 +30,8 @@ public sealed class StateFileWriter
     /// <summary>Monitors to list as hw.mon.*; null = none.</summary>
     public IDisplayControl? Displays { get; set; }
 
-    /// <summary>Display-required power requests as hw.disp_req, hw.disp_req_by; null = none.</summary>
-    public ILassoControl? Lasso { get; set; }
+    /// <summary>Power requests as hw.disp_req, hw.sys_req, hw.exec_req (+ _by); null = none.</summary>
+    public IPowerRequests? Power { get; set; }
 
     public void Write(IFanControl fans, IRgbControl? rgb, float? mixTemp)
     {
@@ -59,10 +59,13 @@ public sealed class StateFileWriter
             }
         }
 
-        if (Lasso?.State is { } lasso)
+        if (Power?.State is { } power)
         {
-            Add(sb, "hw.disp_req", lasso.DisplayRequest.ToString(CultureInfo.InvariantCulture));
-            Add(sb, "hw.disp_req_by", lasso.DisplayRequestBy);
+            foreach (var (section, key) in new[] { ("DISPLAY", "disp_req"), ("SYSTEM", "sys_req"), ("EXECUTION", "exec_req") })
+            {
+                Add(sb, $"hw.{key}", power.Count(section).ToString(CultureInfo.InvariantCulture));
+                Add(sb, $"hw.{key}_by", power.First(section));
+            }
         }
 
         if (displays != null)

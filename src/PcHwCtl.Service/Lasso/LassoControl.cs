@@ -1,22 +1,23 @@
 using System.Diagnostics;
-using System.Text.RegularExpressions;
+using System.Runtime.InteropServices;
 using PcHwCtl.Core.Lasso;
 
 namespace PcHwCtl.Service.Lasso;
 
 /// <summary>
-/// Process Lasso control, service side (needs SYSTEM for prolasso.ini and other users' process affinity). Every
+/// Process Lasso control, service side (needs SYSTEM for prolasso.ini and other users' processes). Every affinity
 /// change goes into the ini, so Process Lasso keeps it for processes started later, and onto the running processes
-/// now. Also reads display-required power requests from `powercfg /requests` for the board.
+/// now. Efficiency mode is set on running processes and swept onto new instances every EcoSweepS.
 /// </summary>
-public sealed partial class LassoControl : ILassoControl, IDisposable
+public sealed class LassoControl : ILassoControl, IDisposable
 {
     private readonly Func<LassoConfig> _config;
     private readonly Action<string> _log;
     private readonly object _gate = new();
     private readonly CancellationTokenSource _cts = new();
-    private volatile int _displayRequest = -1;
-    private volatile string _displayRequestBy = "";
+
+    // exe (no .exe) -> pid -> (create time, the process's own setting before ours)
+    private readonly Dictionary<string, Dictionary<int, (DateTime Created, uint Control, uint State)>> _eco = new(StringComparer.OrdinalIgnoreCase);
 
     public LassoControl(Func<LassoConfig> config, Action<string> log)
     {
@@ -39,7 +40,7 @@ public sealed partial class LassoControl : ILassoControl, IDisposable
             {
                 rules = -1;
             }
-            return new LassoState(rules, _displayRequest, _displayRequestBy);
+            lock (_gate) return new LassoState(rules, _eco.Keys.Select(k => k + ".exe").Order(StringComparer.OrdinalIgnoreCase).ToList());
         }
     }
 
@@ -49,20 +50,23 @@ public sealed partial class LassoControl : ILassoControl, IDisposable
         {
             while (!_cts.IsCancellationRequested)
             {
+                _cts.Token.WaitHandle.WaitOne(TimeSpan.FromSeconds(Math.Max(1, _config().EcoSweepS)));
                 try
                 {
-                    PollDisplayRequests();
+                    lock (_gate)
+                    {
+                        foreach (string exe in _eco.Keys.ToList()) EcoApply(exe);
+                    }
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
-                    _displayRequest = -1;
+                    _log($"Lasso: efficiency sweep failed: {ex.Message}");
                 }
-                _cts.Token.WaitHandle.WaitOne(TimeSpan.FromSeconds(Math.Max(1, _config().DisplayRequestPollS)));
             }
         })
         {
             IsBackground = true,
-            Name = "PcHwCtl-DisplayRequests"
+            Name = "PcHwCtl-EcoSweep"
         };
         thread.Start();
     }
@@ -137,6 +141,84 @@ public sealed partial class LassoControl : ILassoControl, IDisposable
         return Directory.GetFiles(dir, "*.ini").Select(f => Path.GetFileNameWithoutExtension(f)).Order(StringComparer.OrdinalIgnoreCase).ToList();
     }
 
+    public LassoResult Eco(string exe, bool on)
+    {
+        string name = LassoIni.ExeName(exe);
+        string key = LassoIni.RuleExe(name);
+        lock (_gate)
+        {
+            if (on)
+            {
+                if (!_eco.ContainsKey(key)) _eco[key] = new();
+                return Result($"{name} efficiency mode on", EcoApply(key));
+            }
+            if (!_eco.Remove(key, out var held)) return new LassoResult($"{name}: efficiency mode was not on", 0);
+            return Result($"{name} efficiency mode off", EcoRestore(held));
+        }
+    }
+
+    public LassoResult EcoOffAll()
+    {
+        lock (_gate)
+        {
+            int changed = 0;
+            foreach (var held in _eco.Values) changed += EcoRestore(held);
+            int exes = _eco.Count;
+            _eco.Clear();
+            return Result($"efficiency mode off for {exes} exes", changed);
+        }
+    }
+
+    /// <summary>Instances of exe not yet in efficiency mode get it; their own setting is kept for off. Under _gate.</summary>
+    private int EcoApply(string exe)
+    {
+        var held = _eco[exe];
+        int changed = 0;
+        var alive = new HashSet<int>();
+        foreach (var p in Process.GetProcessesByName(exe))
+        {
+            using (p)
+            {
+                alive.Add(p.Id);
+                DateTime created;
+                try
+                {
+                    created = p.StartTime;
+                }
+                catch (Exception ex) when (ex is InvalidOperationException or System.ComponentModel.Win32Exception or NotSupportedException)
+                {
+                    continue; // protected or gone
+                }
+                if (held.TryGetValue(p.Id, out var h) && h.Created == created) continue;
+                if (!EcoQos.Get(p.Id, out uint control, out uint state)) continue;
+                if (!EcoQos.Set(p.Id, EcoQos.ExecutionSpeed, EcoQos.ExecutionSpeed)) continue;
+                held[p.Id] = (created, control, state);
+                changed++;
+            }
+        }
+        foreach (int pid in held.Keys.Where(pid => !alive.Contains(pid)).ToList()) held.Remove(pid);
+        return changed;
+    }
+
+    private static int EcoRestore(Dictionary<int, (DateTime Created, uint Control, uint State)> held)
+    {
+        int changed = 0;
+        foreach (var (pid, h) in held)
+        {
+            try
+            {
+                using var p = Process.GetProcessById(pid);
+                if (p.StartTime != h.Created) continue; // pid reused
+                if (EcoQos.Set(pid, h.Control, h.State)) changed++;
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
+            {
+                // Gone.
+            }
+        }
+        return changed;
+    }
+
     private string IniPath()
     {
         string ini = _config().Ini;
@@ -179,51 +261,58 @@ public sealed partial class LassoControl : ILassoControl, IDisposable
         return new LassoResult(message, changed);
     }
 
-    [GeneratedRegex(@"^[A-Z]+:$")]
-    private static partial Regex SectionHeader();
-
-    /// <summary>"DISPLAY:" then "None." or "[PROCESS] \Device\...\brave.exe" + reason lines, until the next "XYZ:" header.</summary>
-    private void PollDisplayRequests()
-    {
-        var psi = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "powercfg.exe"), "/requests")
-        {
-            UseShellExecute = false,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            CreateNoWindow = true
-        };
-        string output;
-        using (var p = Process.Start(psi)!)
-        {
-            output = p.StandardOutput.ReadToEnd();
-            p.WaitForExit(5000);
-            if (p.ExitCode != 0)
-            {
-                _displayRequest = -1;
-                return;
-            }
-        }
-
-        bool inDisplay = false;
-        string? by = null;
-        foreach (string raw in output.Split('\n'))
-        {
-            string l = raw.Trim();
-            if (SectionHeader().IsMatch(l))
-            {
-                inDisplay = l == "DISPLAY:";
-                continue;
-            }
-            if (inDisplay && by == null && l.StartsWith('['))
-            {
-                string what = l[(l.IndexOf(']') + 1)..].Trim();
-                by = Path.GetFileName(what);
-                if (string.IsNullOrEmpty(by)) by = what;
-            }
-        }
-        _displayRequestBy = by ?? "";
-        _displayRequest = by != null ? 1 : 0;
-    }
-
     public void Dispose() => _cts.Cancel();
+
+    /// <summary>ProcessPowerThrottling: ExecutionSpeed in both masks = efficiency mode; the process's own masks otherwise.</summary>
+    private static class EcoQos
+    {
+        public const uint ExecutionSpeed = 1;
+        private const int ProcessPowerThrottling = 4;
+        private const uint ProcessSetInformation = 0x0200, ProcessQueryLimitedInformation = 0x1000;
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct State
+        {
+            public uint Version, ControlMask, StateMask;
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)] private static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
+        [DllImport("kernel32.dll")] private static extern bool CloseHandle(IntPtr handle);
+        [DllImport("kernel32.dll", SetLastError = true)] private static extern bool SetProcessInformation(IntPtr process, int infoClass, ref State info, int size);
+        [DllImport("kernel32.dll", SetLastError = true)] private static extern bool GetProcessInformation(IntPtr process, int infoClass, ref State info, int size);
+
+        public static bool Get(int pid, out uint control, out uint state)
+        {
+            control = state = 0;
+            IntPtr h = OpenProcess(ProcessQueryLimitedInformation, false, pid);
+            if (h == IntPtr.Zero) return false;
+            try
+            {
+                var s = new State { Version = 1 };
+                if (!GetProcessInformation(h, ProcessPowerThrottling, ref s, Marshal.SizeOf<State>())) return false;
+                control = s.ControlMask;
+                state = s.StateMask;
+                return true;
+            }
+            finally
+            {
+                CloseHandle(h);
+            }
+        }
+
+        public static bool Set(int pid, uint control, uint state)
+        {
+            IntPtr h = OpenProcess(ProcessSetInformation, false, pid);
+            if (h == IntPtr.Zero) return false;
+            try
+            {
+                var s = new State { Version = 1, ControlMask = control, StateMask = state };
+                return SetProcessInformation(h, ProcessPowerThrottling, ref s, Marshal.SizeOf<State>());
+            }
+            finally
+            {
+                CloseHandle(h);
+            }
+        }
+    }
 }

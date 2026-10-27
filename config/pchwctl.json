@@ -277,12 +277,13 @@
     "enabled": true,
     "intervalMs": 500,
     "resolveS": 30,
+    "requestsPollS": 5,
     "every": { "Cpu": 1000, "Memory": 1000 }
   },
   "lasso": {
     "enabled": true,
     "ini": "C:\\ProgramData\\ProcessLasso\\config\\prolasso.ini",
     "profilesDir": "C:\\ProgramData\\PcHwCtl\\lasso",
-    "displayRequestPollS": 10
+    "ecoSweepS": 10
   }
 }

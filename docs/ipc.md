@@ -35,6 +35,10 @@ Names are case-insensitive. `<fan>` = a fan key from config or `all`. `<group>` 
 | `lasso save <profile>` | copies prolasso.ini to `lasso.profilesDir\<profile>.ini`. Names only (letters, digits, `_ . -`), never paths |
 | `lasso load <profile>` | the profile replaces prolasso.ini; running processes follow its rules, names whose rule went away get every CPU |
 | `lasso profiles` | saved profile names |
+| `eco on <exe>` | Windows efficiency mode (EcoQoS: low clocks, E-cores preferred) on every instance, now and for instances started later (swept every `lasso.ecoSweepS`, 10 s). Memory only: gone on service restart |
+| `eco off <exe\|all>` | gives each process back the efficiency setting it had before |
+| `eco list` | exes held in efficiency mode |
+| `proc top [n]` | the n (default 5, max 50) busiest exes over the last second: `[{exe, cores, instances}]`, `cores` 1.0 = one core busy, summed over instances. Includes system and kept processes |
 | `get sensors` | latest sensor feed snapshot as JSON: `{seq, ts, values: {cpu_temp: 41.8, gpu1_fan: null, ...}}` |
 | `subscribe sensors` | after the ack line, the server pushes every sensor feed snapshot as text, see [Sensor feed](#sensor-feed) |
 | `subscribe` | after the ack line, the server pushes one `get state` style line per tick until the client disconnects |
@@ -75,7 +79,7 @@ PcHwCtl is the only LibreHardwareMonitor reader on the PC: ESP32-Helper subscrib
 - `intervalMs` 500.
 - `every` {Cpu: 1000, Memory: 1000}.
 - `resolveS` 30.
-- `keys`: key -> `"hardware | sensor type | sensor name [| first|avg|sum|max|min]"`, the helper's stats.ini syntax. The defaults are the handoff's 21 keys: cpu_temp, cpu_power, cpu_fan, sys_fan, vrm_temp, ram_temp, gpu1_*/gpu2_* (temp, fan, clock, load, vram, vramt, power) and igpu_load.
+- `keys`: key -> `"hardware | sensor type | sensor name [| first|avg|sum|max|min]"`, the helper's stats.ini syntax. The defaults are the handoff's 21 keys: cpu_temp, cpu_power, cpu_fan, sys_fan, vrm_temp, ram_temp, gpu1_*/gpu2_* (temp, fan, clock, load, vram, vramt, power) and igpu_load. After them come the activity keys `proc_top`, `disp_req`, `sys_req`, `exec_req` and the text keys `proc_top_by`, `disp_req_by`, `sys_req_by`, `exec_req_by` (see [Activity](#activity-for-the-boards-night-sleep-and-hibernate-timers)).
 
 Refresh, the same split loop as the helper:
 
@@ -104,7 +108,19 @@ igpu_load=
 
 ## Process Lasso
 
-Building blocks only; policy such as night mode lives on the board ([protocols/process-lasso.md](protocols/process-lasso.md)). `get state` carries `"lasso": { "rules": n, "displayRequest": 1|0|-1, "displayRequestBy": "brave.exe" }`; `displayRequest` is 1 while a process holds the display awake (video). State file: `hw.disp_req`, `hw.disp_req_by`. Replies carry `changed`, the number of running processes whose affinity moved.
+Building blocks only; policy such as night mode lives on the board ([protocols/process-lasso.md](protocols/process-lasso.md)). `get state` carries `"lasso": { "rules": n, "eco": ["blender.exe"] }`. Replies carry `changed`, the number of running processes whose affinity or efficiency setting moved.
+
+## Activity (for the board's night, sleep and hibernate timers)
+
+PcHwCtl reports; the board owns thresholds, hysteresis and timers.
+
+- **Per-exe CPU:** one `NtQuerySystemInformation` call per second (no process handles, protected processes included). `cores` is CPU time per second of wall time, summed over the exe's instances. A single-threaded job shows as 1.0, not 5 % of 20 threads. Feed keys `proc_top` and `proc_top_by` hold the busiest exe; `proc top [n]` gives more, so the board can skip its keep list.
+- **Power requests:** `powercfg /requests` every `feed.requestsPollS` (5 s).
+  - DISPLAY: something keeps the screen on (video).
+  - SYSTEM: something keeps the PC awake (audio playing, Windows Update, downloads that ask).
+  - EXECUTION: an app asks to keep running.
+  - Feed keys `disp_req`, `sys_req`, `exec_req` (count, -1 unknown) plus `*_by` (first requester). `get state` has `"power": {display, displayBy, system, systemBy, execution, executionBy}`. State file: `hw.disp_req`, `hw.sys_req`, `hw.exec_req` (+ `_by`).
+  - `claude.exe` holds an EXECUTION request all the time, so the board needs its own ignore list for `exec_req`.
 
 ## Zero RPM (GPU fans)
 

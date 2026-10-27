@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using LibreHardwareMonitor.Hardware;
+using PcHwCtl.Core.Activity;
 using PcHwCtl.Core.Sensors;
 
 namespace PcHwCtl.Service.Sensors;
@@ -14,6 +15,7 @@ public sealed class SensorLoop : IDisposable
     private readonly Func<FeedConfig> _config;
     private readonly SensorFeedHub _hub;
     private readonly Action<string> _log;
+    private readonly IReadOnlyList<IFeedSource> _extras;
     private readonly CancellationTokenSource _cts = new();
     private readonly Dictionary<IHardware, long> _lastUpdateMs = new();
     private readonly HashSet<IHardware> _updating = new();
@@ -26,8 +28,9 @@ public sealed class SensorLoop : IDisposable
     private long _seq;
     private Thread? _thread;
 
-    public SensorLoop(LhmHardware lhm, Func<FeedConfig> config, SensorFeedHub hub, Action<string> log)
+    public SensorLoop(LhmHardware lhm, Func<FeedConfig> config, SensorFeedHub hub, Action<string> log, IReadOnlyList<IFeedSource>? extras = null)
     {
+        _extras = extras ?? [];
         _lhm = lhm;
         _config = config;
         _hub = hub;
@@ -188,7 +191,9 @@ public sealed class SensorLoop : IDisposable
             var read = sensors.Where(s => s.Value.HasValue).Select(s => (double)s.Value!.Value);
             values.Add(new(rule.Key, rule.Apply(read)));
         }
-        _hub.Publish(new SensorSnapshot(++_seq, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), values));
+        var texts = new List<KeyValuePair<string, string>>();
+        foreach (var source in _extras) source.AddTo(values, texts);
+        _hub.Publish(new SensorSnapshot(++_seq, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), values, texts));
     }
 
     public void Dispose() => _cts.Cancel();

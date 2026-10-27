@@ -3,10 +3,12 @@ using System.Security.Principal;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using PcHwCtl.Core;
+using PcHwCtl.Core.Activity;
 using PcHwCtl.Core.Display;
 using PcHwCtl.Core.Ipc;
 using PcHwCtl.Core.Rgb;
 using PcHwCtl.Core.Sensors;
+using PcHwCtl.Service.Activity;
 using PcHwCtl.Service.Devices;
 using PcHwCtl.Service.Display;
 using PcHwCtl.Service.Lasso;
@@ -234,12 +236,18 @@ public static class Program
 
         // Sensor feed: from here on the only LibreHardwareMonitor updater (split loop, see FeedConfig); fans and RGB
         // read what it leaves, and ESP32-Helper subscribes instead of running its own reader.
+        // Activity for the board's night, sleep and hibernate decisions: per-exe CPU and power requests (read only).
+        var processCpu = new ProcessCpuSampler(msg => logger.Log(msg));
+        processCpu.Start();
+        var powerRequests = new PowerRequestsPoller(() => config.Feed.RequestsPollS, msg => logger.Log(msg));
+        powerRequests.Start();
+
         SensorFeedHub? sensorHub = null;
         SensorLoop? sensorLoop = null;
         if (config.Feed.Enabled)
         {
             sensorHub = new SensorFeedHub();
-            sensorLoop = new SensorLoop(hardware, () => config.Feed, sensorHub, msg => logger.Log(msg));
+            sensorLoop = new SensorLoop(hardware, () => config.Feed, sensorHub, msg => logger.Log(msg), [processCpu, powerRequests]);
             sensorLoop.Start();
         }
 
@@ -247,13 +255,13 @@ public static class Program
         EngineHost? hostRef = null;
         if (config.Ipc.Enabled)
         {
-            var processor = new CommandProcessor(engine, rgb, () => config.Ipc, SystemClock.Instance, persisted, displays, lasso, sensorHub);
+            var processor = new CommandProcessor(engine, rgb, () => config.Ipc, SystemClock.Instance, persisted, displays, lasso, sensorHub, processCpu, powerRequests);
             pipe = new PipeServer(processor, config.Ipc, () => hostRef?.TickMs ?? 1000, msg => logger.Log(msg), sensorHub);
         }
 
         var stateFile = new StateFileWriter(
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "PcHwCtl", "state.txt"),
-            msg => logger.Log(msg)) { Displays = displays, Lasso = lasso };
+            msg => logger.Log(msg)) { Displays = displays, Power = powerRequests };
 
         var host = new EngineHost(
             config,
@@ -273,6 +281,8 @@ public static class Program
         AppDomain.CurrentDomain.ProcessExit += (_, _) =>
         {
             sensorLoop?.Dispose();
+            processCpu.Dispose();
+            powerRequests.Dispose();
             host.ShutdownAll();
             displayCts.Cancel();
             displayLauncher?.Dispose();

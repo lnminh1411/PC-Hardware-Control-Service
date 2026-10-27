@@ -16,6 +16,9 @@ public sealed class FeedConfig
     public int IntervalMs { get; set; } = 500;
     public int ResolveS { get; set; } = 30;
 
+    /// <summary>How often `powercfg /requests` is read for the disp_req / sys_req / exec_req keys.</summary>
+    public int RequestsPollS { get; set; } = 5;
+
     /// <summary>Hardware type or name pattern -> minimum ms between its updates, refreshed in the background.</summary>
     public Dictionary<string, int> Every { get; set; } = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -128,11 +131,13 @@ public static class Wildcard
 }
 
 /// <param name="Values">Every configured key in order; null = missing (no sensor or no reading).</param>
-public sealed record SensorSnapshot(long Seq, long UnixMs, IReadOnlyList<KeyValuePair<string, double?>> Values)
+/// <param name="Texts">Text keys (proc_top_by, disp_req_by, ...); "" = none.</param>
+public sealed record SensorSnapshot(long Seq, long UnixMs, IReadOnlyList<KeyValuePair<string, double?>> Values,
+    IReadOnlyList<KeyValuePair<string, string>>? Texts = null)
 {
     public static string Format(double value) => value.ToString("0.##", CultureInfo.InvariantCulture);
 
-    /// <summary>"seq=", "ts=" (Unix ms), then one "key=value" line per key ("key=" when missing), then an empty line.</summary>
+    /// <summary>"seq=", "ts=" (Unix ms), one "key=value" line per key ("key=" when missing), the text keys, then an empty line.</summary>
     public string ToText()
     {
         var sb = new StringBuilder(64 + Values.Count * 20);
@@ -143,6 +148,10 @@ public sealed record SensorSnapshot(long Seq, long UnixMs, IReadOnlyList<KeyValu
             sb.Append(key).Append('=');
             if (value is double v) sb.Append(Format(v));
             sb.Append('\n');
+        }
+        foreach (var (key, text) in Texts ?? [])
+        {
+            sb.Append(key).Append('=').Append(text.Replace('\n', ' ').Replace('\r', ' ')).Append('\n');
         }
         sb.Append('\n');
         return sb.ToString();

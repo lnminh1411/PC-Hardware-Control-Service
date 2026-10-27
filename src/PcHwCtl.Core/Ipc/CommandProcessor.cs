@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using PcHwCtl.Core.Activity;
 using PcHwCtl.Core.Control;
 using PcHwCtl.Core.Display;
 using PcHwCtl.Core.Lasso;
@@ -28,17 +29,22 @@ public sealed class CommandProcessor
     private readonly IDisplayControl? _displays;
     private readonly ILassoControl? _lasso;
     private readonly SensorFeedHub? _sensors;
+    private readonly IProcessActivity? _processes;
+    private readonly IPowerRequests? _power;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="CommandProcessor"/> class.
     /// </summary>
     /// <param name="persisted">Where Zero RPM toggles and brightness are saved; null = not saved.</param>
     /// <param name="displays">Monitor control; null = display commands report it is off.</param>
-    public CommandProcessor(IFanControl fans, IRgbControl rgb, Func<IpcConfig> ipcConfig, IClock clock, PersistedSettings? persisted = null, IDisplayControl? displays = null, ILassoControl? lasso = null, SensorFeedHub? sensors = null)
+    public CommandProcessor(IFanControl fans, IRgbControl rgb, Func<IpcConfig> ipcConfig, IClock clock, PersistedSettings? persisted = null, IDisplayControl? displays = null, ILassoControl? lasso = null, SensorFeedHub? sensors = null,
+        IProcessActivity? processes = null, IPowerRequests? power = null)
     {
         _displays = displays;
         _lasso = lasso;
         _sensors = sensors;
+        _processes = processes;
+        _power = power;
         _fans = fans;
         _rgb = rgb;
         _ipcConfig = ipcConfig;
@@ -79,6 +85,8 @@ public sealed class CommandProcessor
                     : DisplayCommands.Execute(_displays, tokens[1..]),
                 "aff" => HandleAff(tokens),
                 "lasso" => HandleLasso(tokens),
+                "eco" => HandleEco(tokens),
+                "proc" => HandleProc(tokens),
                 "release" => HandleGenericRelease(tokens),
                 _ => Error($"Unknown command '{tokens[0]}'.")
             };
@@ -129,7 +137,9 @@ public sealed class CommandProcessor
             {
                 seq = s.Seq,
                 ts = s.UnixMs,
-                values = s.Values.ToDictionary(kv => kv.Key, kv => kv.Value is double v ? (double?)Math.Round(v, 2) : null)
+                values = s.Values.Select(kv => new KeyValuePair<string, object?>(kv.Key, kv.Value is double v ? Math.Round(v, 2) : null))
+                    .Concat((s.Texts ?? []).Select(kv => new KeyValuePair<string, object?>(kv.Key, kv.Value)))
+                    .ToDictionary(kv => kv.Key, kv => kv.Value)
             });
         }
 
@@ -373,13 +383,48 @@ public sealed class CommandProcessor
         }
     }
 
+    private string HandleEco(string[] tokens)
+    {
+        if (_lasso == null) return Error("Process Lasso control is off (config lasso.enabled).");
+        const string usage = "Usage: eco on <exe> | eco off <exe|all> | eco list";
+        return LassoCall(() => (tokens.Length, tokens.Length > 1 ? tokens[1].ToLowerInvariant() : "") switch
+        {
+            (3, "on") => Ok(ResultDto(_lasso.Eco(tokens[2], true))),
+            (3, "off") when tokens[2].Equals("all", StringComparison.OrdinalIgnoreCase) => Ok(ResultDto(_lasso.EcoOffAll())),
+            (3, "off") => Ok(ResultDto(_lasso.Eco(tokens[2], false))),
+            (2, "list") => Ok(new { eco = _lasso.State.Eco }),
+            _ => Error(usage)
+        });
+    }
+
+    private string HandleProc(string[] tokens)
+    {
+        if (_processes == null) return Error("Process CPU sampling is off.");
+        int n = 5;
+        if (tokens.Length is < 2 or > 3 || !tokens[1].Equals("top", StringComparison.OrdinalIgnoreCase)
+            || (tokens.Length == 3 && (!int.TryParse(tokens[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out n) || n is < 1 or > 50)))
+        {
+            return Error("Usage: proc top [1-50]");
+        }
+        return Ok(new { processes = _processes.Top(n).Select(p => new { exe = p.Exe, cores = Math.Round(p.Cores, 2), instances = p.Instances }) });
+    }
+
+    private static object PowerDto(PowerRequestState s) => new
+    {
+        display = s.Count("DISPLAY"),
+        displayBy = s.First("DISPLAY"),
+        system = s.Count("SYSTEM"),
+        systemBy = s.First("SYSTEM"),
+        execution = s.Count("EXECUTION"),
+        executionBy = s.First("EXECUTION")
+    };
+
     private static object ResultDto(LassoResult r) => new { result = r.Message, changed = r.Changed };
 
     private static object LassoDto(LassoState s) => new
     {
         rules = s.Rules,
-        displayRequest = s.DisplayRequest,
-        displayRequestBy = s.DisplayRequestBy
+        eco = s.Eco
     };
 
     private string HandleRgb(string[] tokens)
@@ -703,7 +748,7 @@ public sealed class CommandProcessor
             Devices: devices);
 
         DisplaysView? displays = _displays == null ? null : new DisplaysView(_displays.Status, _displays.Displays);
-        return new StateDto(fanDict, rgbState, displays, _lasso == null ? null : LassoDto(_lasso.State));
+        return new StateDto(fanDict, rgbState, displays, _lasso == null ? null : LassoDto(_lasso.State), _power == null ? null : PowerDto(_power.State));
     }
 
     private static string Ok(object? data)
@@ -744,7 +789,8 @@ public sealed record StateDto(
     [property: JsonPropertyName("fans")] IReadOnlyDictionary<string, FanStateDto> Fans,
     [property: JsonPropertyName("rgb")] RgbStateDto Rgb,
     [property: JsonPropertyName("displays")] DisplaysView? Displays = null,
-    [property: JsonPropertyName("lasso")] object? Lasso = null);
+    [property: JsonPropertyName("lasso")] object? Lasso = null,
+    [property: JsonPropertyName("power")] object? Power = null);
 
 /// <summary>Fan state data transfer object.</summary>
 public sealed record FanStateDto(

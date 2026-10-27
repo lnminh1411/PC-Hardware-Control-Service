@@ -8,7 +8,8 @@ namespace PcHwCtl.Core.Tests;
 public sealed class FakeLasso : ILassoControl
 {
     public List<string> Calls { get; } = [];
-    public LassoState State => new(5, 1, "brave.exe");
+    public LassoState State => new(5, Eco.Count == 0 ? [] : ["blender.exe"]);
+    private List<string> Eco { get; } = [];
 
     public IReadOnlyList<(string Name, string Cpus)> Rules() => [("brave.exe", "0-9")];
 
@@ -38,6 +39,20 @@ public sealed class FakeLasso : ILassoControl
     }
 
     public IReadOnlyList<string> Profiles() => ["day", "night"];
+
+    LassoResult ILassoControl.Eco(string exe, bool on)
+    {
+        Calls.Add($"eco {exe} {on}");
+        if (on) Eco.Add(LassoIni.ExeName(exe)); else Eco.Remove(LassoIni.ExeName(exe));
+        return new LassoResult(on ? "on" : "off", 4);
+    }
+
+    public LassoResult EcoOffAll()
+    {
+        Calls.Add("eco off all");
+        Eco.Clear();
+        return new LassoResult("all off", 6);
+    }
 }
 
 public class LassoTests
@@ -120,7 +135,13 @@ public class LassoTests
         Assert.Contains("outside 0-19", proc.Execute("aff set brave 0-40"));
         Assert.Contains("not a profile name", proc.Execute("lasso load ../x"));
         Assert.Contains("Usage: aff", proc.Execute("aff set brave"));
-        Assert.Contains("\"lasso\":{\"rules\":5,\"displayRequest\":1", proc.StateJson());
+        Assert.Contains("\"lasso\":{\"rules\":5,\"eco\":[]}", proc.StateJson());
+
+        Assert.Contains("\"changed\":4", proc.Execute("eco on blender"));
+        Assert.Contains("\"eco\":[\"blender.exe\"]", proc.Execute("eco list"));
+        Assert.Contains("\"changed\":6", proc.Execute("eco off all"));
+        Assert.Contains("Usage: eco", proc.Execute("eco on"));
+        Assert.Equal(["eco blender True", "eco off all"], lasso.Calls.Skip(6));
 
         var off = new CommandProcessor(new IpcFakeFanControl(), new IpcFakeRgbControl(), () => new IpcConfig(), new IpcFakeClock());
         Assert.Contains("Process Lasso control is off", off.Execute("aff list"));
