@@ -142,6 +142,7 @@ public static class Program
             "pchwctl.json");
 
         var logger = new FileLogger(consoleOutput: isConsole);
+        ProcessPriority.Apply(msg => logger.Log(msg));
 
         if (!File.Exists(effectiveConfigPath))
         {

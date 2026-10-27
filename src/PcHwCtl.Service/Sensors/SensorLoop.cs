@@ -167,6 +167,10 @@ public sealed class SensorLoop : IDisposable
         lock (_updating) if (!_updating.Add(hw)) return false;
         ThreadPool.QueueUserWorkItem(_ =>
         {
+            // The slow CPU read (~320 ms at full clock, seconds at the night plan's 450 MHz) yields to the fan tick.
+            var thread = Thread.CurrentThread;
+            var priority = thread.Priority;
+            thread.Priority = ThreadPriority.BelowNormal;
             try
             {
                 hw.Update();
@@ -177,6 +181,7 @@ public sealed class SensorLoop : IDisposable
             }
             finally
             {
+                thread.Priority = priority;
                 lock (_updating) _updating.Remove(hw);
             }
         });

@@ -203,6 +203,8 @@ public sealed class EngineHost : IDisposable
 
     private void RgbLoop(CancellationToken cancellationToken)
     {
+        // Below the fan tick: on a slow or crowded CPU, frames may drop, fan updates may not.
+        Thread.CurrentThread.Priority = ThreadPriority.BelowNormal;
         // The default 15.6 ms timer tick cannot pace 60 fps; ask for 1 ms while the loop runs.
         timeBeginPeriod(1);
         try

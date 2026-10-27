@@ -169,7 +169,7 @@ public sealed class RgbEngine : IRgbControl, IDisposable
 
         public void Start()
         {
-            _thread = new Thread(Run) { IsBackground = true, Name = $"PcHwCtl-Rgb-{Device.Id}" };
+            _thread = new Thread(Run) { IsBackground = true, Name = $"PcHwCtl-Rgb-{Device.Id}", Priority = ThreadPriority.BelowNormal };
             _thread.Start();
         }
 
