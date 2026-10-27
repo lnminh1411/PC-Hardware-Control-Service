@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using PcHwCtl.Core.Control;
 using PcHwCtl.Core.Display;
+using PcHwCtl.Core.Lasso;
 
 namespace PcHwCtl.Service;
 
@@ -29,6 +30,9 @@ public sealed class StateFileWriter
     /// <summary>Monitors to list as hw.mon.*; null = none.</summary>
     public IDisplayControl? Displays { get; set; }
 
+    /// <summary>Display-required power requests as hw.disp_req, hw.disp_req_by; null = none.</summary>
+    public ILassoControl? Lasso { get; set; }
+
     public void Write(IFanControl fans, IRgbControl? rgb, float? mixTemp)
     {
         var displays = Displays;
@@ -53,6 +57,12 @@ public sealed class StateFileWriter
             {
                 Add(sb, $"hw.rgb.{Key(group)}", state.OverrideRule ?? state.Rule);
             }
+        }
+
+        if (Lasso?.State is { } lasso)
+        {
+            Add(sb, "hw.disp_req", lasso.DisplayRequest.ToString(CultureInfo.InvariantCulture));
+            Add(sb, "hw.disp_req_by", lasso.DisplayRequestBy);
         }
 
         if (displays != null)

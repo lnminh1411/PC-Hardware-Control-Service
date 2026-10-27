@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using PcHwCtl.Core.Control;
 using PcHwCtl.Core.Display;
+using PcHwCtl.Core.Lasso;
 using PcHwCtl.Core.Rgb;
 
 namespace PcHwCtl.Core.Ipc;
@@ -24,15 +25,17 @@ public sealed class CommandProcessor
     private readonly IClock _clock;
     private readonly PersistedSettings? _persisted;
     private readonly IDisplayControl? _displays;
+    private readonly ILassoControl? _lasso;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="CommandProcessor"/> class.
     /// </summary>
     /// <param name="persisted">Where Zero RPM toggles and brightness are saved; null = not saved.</param>
     /// <param name="displays">Monitor control; null = display commands report it is off.</param>
-    public CommandProcessor(IFanControl fans, IRgbControl rgb, Func<IpcConfig> ipcConfig, IClock clock, PersistedSettings? persisted = null, IDisplayControl? displays = null)
+    public CommandProcessor(IFanControl fans, IRgbControl rgb, Func<IpcConfig> ipcConfig, IClock clock, PersistedSettings? persisted = null, IDisplayControl? displays = null, ILassoControl? lasso = null)
     {
         _displays = displays;
+        _lasso = lasso;
         _fans = fans;
         _rgb = rgb;
         _ipcConfig = ipcConfig;
@@ -71,6 +74,8 @@ public sealed class CommandProcessor
                 "display" => _displays == null
                     ? Error("Display control is off (config displays.enabled).")
                     : DisplayCommands.Execute(_displays, tokens[1..]),
+                "aff" => HandleAff(tokens),
+                "lasso" => HandleLasso(tokens),
                 "release" => HandleGenericRelease(tokens),
                 _ => Error($"Unknown command '{tokens[0]}'.")
             };
@@ -303,6 +308,53 @@ public sealed class CommandProcessor
 
         return Ok(null);
     }
+
+    private string HandleAff(string[] tokens)
+    {
+        if (_lasso == null) return Error("Process Lasso control is off (config lasso.enabled).");
+        const string usage = "Usage: aff set <exe> <cpus> | aff clear <exe> | aff list";
+        return LassoCall(() => (tokens.Length, tokens.Length > 1 ? tokens[1].ToLowerInvariant() : "") switch
+        {
+            (4, "set") => Ok(ResultDto(_lasso.SetAffinity(tokens[2], tokens[3]))),
+            (3, "clear") => Ok(ResultDto(_lasso.ClearAffinity(tokens[2]))),
+            (2, "list") => Ok(new { rules = _lasso.Rules().Select(r => new { name = r.Name, cpus = r.Cpus }) }),
+            _ => Error(usage)
+        });
+    }
+
+    private string HandleLasso(string[] tokens)
+    {
+        if (_lasso == null) return Error("Process Lasso control is off (config lasso.enabled).");
+        const string usage = "Usage: lasso load <profile> | lasso save <profile> | lasso profiles";
+        return LassoCall(() => (tokens.Length, tokens.Length > 1 ? tokens[1].ToLowerInvariant() : "") switch
+        {
+            (3, "load") => Ok(ResultDto(_lasso.Load(tokens[2]))),
+            (3, "save") => Ok(ResultDto(_lasso.Save(tokens[2]))),
+            (2, "profiles") => Ok(new { profiles = _lasso.Profiles() }),
+            _ => Error(usage)
+        });
+    }
+
+    private static string LassoCall(Func<string> call)
+    {
+        try
+        {
+            return call();
+        }
+        catch (Exception ex) when (ex is LassoException or IOException or UnauthorizedAccessException)
+        {
+            return Error(ex.Message);
+        }
+    }
+
+    private static object ResultDto(LassoResult r) => new { result = r.Message, changed = r.Changed };
+
+    private static object LassoDto(LassoState s) => new
+    {
+        rules = s.Rules,
+        displayRequest = s.DisplayRequest,
+        displayRequestBy = s.DisplayRequestBy
+    };
 
     private string HandleRgb(string[] tokens)
     {
@@ -625,7 +677,7 @@ public sealed class CommandProcessor
             Devices: devices);
 
         DisplaysView? displays = _displays == null ? null : new DisplaysView(_displays.Status, _displays.Displays);
-        return new StateDto(fanDict, rgbState, displays);
+        return new StateDto(fanDict, rgbState, displays, _lasso == null ? null : LassoDto(_lasso.State));
     }
 
     private static string Ok(object? data)
@@ -665,7 +717,8 @@ public sealed class CommandProcessor
 public sealed record StateDto(
     [property: JsonPropertyName("fans")] IReadOnlyDictionary<string, FanStateDto> Fans,
     [property: JsonPropertyName("rgb")] RgbStateDto Rgb,
-    [property: JsonPropertyName("displays")] DisplaysView? Displays = null);
+    [property: JsonPropertyName("displays")] DisplaysView? Displays = null,
+    [property: JsonPropertyName("lasso")] object? Lasso = null);
 
 /// <summary>Fan state data transfer object.</summary>
 public sealed record FanStateDto(

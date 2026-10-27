@@ -8,6 +8,7 @@ using PcHwCtl.Core.Ipc;
 using PcHwCtl.Core.Rgb;
 using PcHwCtl.Service.Devices;
 using PcHwCtl.Service.Display;
+using PcHwCtl.Service.Lasso;
 using PcHwCtl.Service.Ipc;
 
 namespace PcHwCtl.Service;
@@ -221,17 +222,25 @@ public static class Program
             }
         }
 
+        // Process Lasso control needs SYSTEM (prolasso.ini, other users' affinity), so it lives here, not in the display agent.
+        LassoControl? lasso = null;
+        if (config.Lasso.Enabled && !isDryRun)
+        {
+            lasso = new LassoControl(() => config.Lasso, msg => logger.Log(msg));
+            lasso.Start();
+        }
+
         PipeServer? pipe = null;
         EngineHost? hostRef = null;
         if (config.Ipc.Enabled)
         {
-            var processor = new CommandProcessor(engine, rgb, () => config.Ipc, SystemClock.Instance, persisted, displays);
+            var processor = new CommandProcessor(engine, rgb, () => config.Ipc, SystemClock.Instance, persisted, displays, lasso);
             pipe = new PipeServer(processor, config.Ipc, () => hostRef?.TickMs ?? 1000, msg => logger.Log(msg));
         }
 
         var stateFile = new StateFileWriter(
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "PcHwCtl", "state.txt"),
-            msg => logger.Log(msg)) { Displays = displays };
+            msg => logger.Log(msg)) { Displays = displays, Lasso = lasso };
 
         var host = new EngineHost(
             config,
@@ -253,6 +262,7 @@ public static class Program
             displayCts.Cancel();
             displayLauncher?.Dispose();
             displayClient?.Dispose();
+            lasso?.Dispose();
         };
 
         AppDomain.CurrentDomain.UnhandledException += (_, e) =>

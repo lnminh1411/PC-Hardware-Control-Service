@@ -272,5 +272,11 @@
         "activeInput": "0x11"
       }
     }
+  },
+  "lasso": {
+    "enabled": true,
+    "ini": "C:\\ProgramData\\ProcessLasso\\config\\prolasso.ini",
+    "profilesDir": "C:\\ProgramData\\PcHwCtl\\lasso",
+    "displayRequestPollS": 10
   }
 }

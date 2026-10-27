@@ -29,6 +29,12 @@ Names are case-insensitive. `<fan>` = a fan key from config or `all`. `<group>` 
 | `display power <n\|all> <on\|off>` | per-monitor power through the model's method (config `displays.models`); `all` skips monitors without one |
 | `display input <n\|all> <code>` | input source, e.g. `0x11` |
 | `display sleep` / `display wake` | Windows display off for every monitor / wake with a 1 px mouse nudge |
+| `aff set <exe> <cpus>` | Process Lasso affinity rule, e.g. `aff set brave.exe 10-15` or `2-5,10-17`: written to prolasso.ini (kept for later starts) and applied to running processes now. Replaces the exe's whole-exe rule; per-instance rules (`svchost.exe (netprofm -p)`) stay |
+| `aff clear <exe>` | removes the exe's rule; running ones get every CPU |
+| `aff list` | the ini's rules: `[{name, cpus}]` |
+| `lasso save <profile>` | copies prolasso.ini to `lasso.profilesDir\<profile>.ini`. Names only (letters, digits, `_ . -`), never paths |
+| `lasso load <profile>` | the profile replaces prolasso.ini; running processes follow its rules, names whose rule went away get every CPU |
+| `lasso profiles` | saved profile names |
 | `subscribe` | after the ack line, the server pushes one `get state` style line per tick until the client disconnects |
 
 ## State
@@ -59,6 +65,10 @@ Names are case-insensitive. `<fan>` = a fan key from config or `all`. `<group>` 
 ## Displays
 
 Monitor control runs in a user-session agent the service starts itself ([protocols/ddc-ci.md](protocols/ddc-ci.md)). `get state` carries `"displays": { "status": null, "monitors": [...] }`; `status` says why when the agent is not reachable. State file: `hw.mon.count`, `hw.mon.<n>.name|main|bright|power`, the keys of the board's old `mon.*` feed under `hw.`.
+
+## Process Lasso
+
+Building blocks only; policy such as night mode lives on the board ([protocols/process-lasso.md](protocols/process-lasso.md)). `get state` carries `"lasso": { "rules": n, "displayRequest": 1|0|-1, "displayRequestBy": "brave.exe" }`; `displayRequest` is 1 while a process holds the display awake (video). State file: `hw.disp_req`, `hw.disp_req_by`. Replies carry `changed`, the number of running processes whose affinity moved.
 
 ## Zero RPM (GPU fans)
 

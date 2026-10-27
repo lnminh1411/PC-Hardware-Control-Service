@@ -1,4 +1,5 @@
 using PcHwCtl.Core.Display;
+using PcHwCtl.Core.Lasso;
 using PcHwCtl.Core.Rgb;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -16,6 +17,7 @@ public sealed class Config
     public DevicesConfig Devices { get; set; } = new();
     public IpcConfig Ipc { get; set; } = new();
     public DisplaysConfig Displays { get; set; } = new();
+    public LassoConfig Lasso { get; set; } = new();
 }
 
 public sealed class SensorConfig
@@ -334,7 +336,13 @@ public static class ConfigLoader
         // 4. RGB groups and rules
         errors.AddRange(RgbConfigValidator.Validate(config.Rgb, config));
 
-        // 5. Displays
+        // 5. Process Lasso
+        if (config.Lasso.Enabled && string.IsNullOrWhiteSpace(config.Lasso.Ini))
+        {
+            errors.Add("Lasso ini path is empty.");
+        }
+
+        // 6. Displays
         if (config.Displays.PollS < 1)
         {
             errors.Add($"Displays pollS {config.Displays.PollS} must be at least 1.");
