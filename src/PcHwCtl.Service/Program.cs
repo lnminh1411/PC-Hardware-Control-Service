@@ -242,13 +242,14 @@ public static class Program
         processCpu.Start();
         var powerRequests = new PowerRequestsPoller(() => config.Feed.RequestsPollS, msg => logger.Log(msg));
         powerRequests.Start();
+        var powerPlans = new PowerPlans(msg => logger.Log(msg));
 
         SensorFeedHub? sensorHub = null;
         SensorLoop? sensorLoop = null;
         if (config.Feed.Enabled)
         {
             sensorHub = new SensorFeedHub();
-            sensorLoop = new SensorLoop(hardware, () => config.Feed, sensorHub, msg => logger.Log(msg), [processCpu, powerRequests]);
+            sensorLoop = new SensorLoop(hardware, () => config.Feed, sensorHub, msg => logger.Log(msg), [processCpu, powerRequests, powerPlans]);
             sensorLoop.Start();
         }
 
@@ -256,13 +257,14 @@ public static class Program
         EngineHost? hostRef = null;
         if (config.Ipc.Enabled)
         {
-            var processor = new CommandProcessor(engine, rgb, () => config.Ipc, SystemClock.Instance, persisted, displays, lasso, sensorHub, processCpu, powerRequests);
+            var processor = new CommandProcessor(engine, rgb, () => config.Ipc, SystemClock.Instance, persisted, displays, lasso, sensorHub, processCpu, powerRequests,
+                powerPlans, () => config.Power);
             pipe = new PipeServer(processor, config.Ipc, () => hostRef?.TickMs ?? 1000, msg => logger.Log(msg), sensorHub);
         }
 
         var stateFile = new StateFileWriter(
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "PcHwCtl", "state.txt"),
-            msg => logger.Log(msg)) { Displays = displays, Power = powerRequests };
+            msg => logger.Log(msg)) { Displays = displays, Power = powerRequests, Plans = powerPlans };
 
         var host = new EngineHost(
             config,

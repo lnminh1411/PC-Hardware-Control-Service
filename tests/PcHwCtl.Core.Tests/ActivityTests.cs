@@ -13,6 +13,25 @@ public sealed class FakeActivity : IProcessActivity, IPowerRequests
     public PowerRequestState State { get; set; } = new(PowerRequestParser.Parse(ActivityTests.Powercfg));
 }
 
+public sealed class FakePlans : IPowerPlans
+{
+    private readonly List<PowerPlan> _plans =
+    [
+        new(Guid.Parse("8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c"), "High performance", true),
+        new(Guid.Parse("3ceb8c3b-ac62-40f4-96ea-7268c04b5a42"), "PcHwCtl Night", false)
+    ];
+
+    public IReadOnlyList<PowerPlan> List() => _plans;
+    public PowerPlan? Active => _plans.FirstOrDefault(p => p.Active);
+
+    public PowerPlan Set(string nameOrGuid)
+    {
+        var plan = PowerPlanMatch.Find(_plans, nameOrGuid) ?? throw new ArgumentException($"No power plan '{nameOrGuid}'.");
+        for (int i = 0; i < _plans.Count; i++) _plans[i] = _plans[i] with { Active = _plans[i].Guid == plan.Guid };
+        return plan with { Active = true };
+    }
+}
+
 public class ActivityTests
 {
     public const string Powercfg =
@@ -87,7 +106,7 @@ public class ActivityTests
         Assert.Contains("Usage: proc top", proc.Execute("proc top 99"));
 
         string state = proc.StateJson();
-        Assert.Contains("\"power\":{\"display\":1,\"displayBy\":\"brave.exe\",\"system\":2", state);
+        Assert.Contains("\"power\":{\"plan\":null,\"display\":1,\"displayBy\":\"brave.exe\",\"system\":2", state);
         Assert.Contains("\"execution\":0,\"executionBy\":\"\"", state);
     }
 
@@ -101,5 +120,26 @@ public class ActivityTests
         hub.Publish(s);
         var proc = new CommandProcessor(new IpcFakeFanControl(), new IpcFakeRgbControl(), () => new IpcConfig(), new IpcFakeClock(), null, null, null, hub);
         Assert.Contains("\"proc_top_by\":\"blender.exe\"", proc.Execute("get sensors"));
+    }
+
+    [Fact]
+    public void Test05_Ipc_PowerPlan()
+    {
+        var plans = new FakePlans();
+        var act = new FakeActivity();
+        var proc = new CommandProcessor(new IpcFakeFanControl(), new IpcFakeRgbControl(), () => new IpcConfig(), new IpcFakeClock(),
+            null, null, null, null, act, act, plans, () => new PowerConfig());
+
+        Assert.Contains("\"name\":\"PcHwCtl Night\"", proc.Execute("power plan"));
+        Assert.Contains("\"plan\":\"PcHwCtl Night\"", proc.Execute("power plan night"));
+        Assert.Contains("\"plan\":\"PcHwCtl Night\",\"display\"", proc.StateJson());
+        Assert.Contains("\"plan\":\"High performance\"", proc.Execute("POWER PLAN DAY"));
+        Assert.Contains("\"plan\":\"PcHwCtl Night\"", proc.Execute("power plan 3ceb8c3b-ac62-40f4-96ea-7268c04b5a42"));
+        Assert.Contains("\"plan\":\"High performance\"", proc.Execute("power plan high performance"));
+        Assert.Contains("No power plan", proc.Execute("power plan Ultimate"));
+        Assert.Contains("Usage: power plan", proc.Execute("power"));
+
+        var off = new CommandProcessor(new IpcFakeFanControl(), new IpcFakeRgbControl(), () => new IpcConfig(), new IpcFakeClock());
+        Assert.Contains("Power plan control is off", off.Execute("power plan night"));
     }
 }

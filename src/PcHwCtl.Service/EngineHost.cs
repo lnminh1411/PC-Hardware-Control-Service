@@ -26,6 +26,7 @@ public sealed class EngineHost : IDisposable
     private int _tickMs;
     private double _rgbFrameMs;
     private int _consecutiveFailures;
+    private volatile string _tickStep = "idle";
     private const int MaxConsecutiveFailures = 5;
 
     public EngineHost(
@@ -76,7 +77,7 @@ public sealed class EngineHost : IDisposable
                 Thread.Sleep(1000);
                 if (!_stopped && (DateTime.UtcNow - _lastTickCompleted) > TimeSpan.FromSeconds(10))
                 {
-                    _logger.Log("Watchdog: no tick completed for 10 s, shutting down and exiting.");
+                    _logger.Log($"Watchdog: no tick completed for 10 s (stuck in: {_tickStep}), shutting down and exiting.");
                     ShutdownAll();
                     Environment.Exit(4);
                 }
@@ -84,12 +85,42 @@ public sealed class EngineHost : IDisposable
         })
         {
             IsBackground = true,
-            Name = "PcHwCtl-Watchdog"
+            Name = "PcHwCtl-Watchdog",
+            Priority = ThreadPriority.Highest
         };
         thread.Start();
     }
 
-    public async Task RunAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// The fan loop runs on its own thread at Highest priority, not on the thread pool: on a slow or crowded CPU
+    /// (night plan at ~450 MHz, parked cores) pool threads busy with sensor reads and pipe clients made it miss
+    /// the watchdog. Completes when the loop has stopped and everything is shut down.
+    /// </summary>
+    public Task RunAsync(CancellationToken cancellationToken)
+    {
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                RunLoop(cancellationToken);
+                done.SetResult();
+            }
+            catch (Exception ex)
+            {
+                done.SetException(ex);
+            }
+        })
+        {
+            IsBackground = true,
+            Name = "PcHwCtl-Fans",
+            Priority = ThreadPriority.Highest
+        };
+        thread.Start();
+        return done.Task;
+    }
+
+    private void RunLoop(CancellationToken cancellationToken)
     {
         StartWatchdog();
         _pipe?.Start();
@@ -114,16 +145,27 @@ public sealed class EngineHost : IDisposable
             }
             lastTickStart = tickStart;
 
+            var steps = new System.Diagnostics.Stopwatch();
+            long reloadMs = 0, refreshMs = 0, engineMs = 0, stateMs = 0;
             try
             {
                 // 1. Config hot reload
+                _tickStep = "config reload";
+                steps.Restart();
                 CheckConfigReload();
+                reloadMs = steps.ElapsedMilliseconds;
 
                 // 2. Hardware refresh, unless the sensor loop keeps the values fresh
+                _tickStep = "hardware refresh";
+                steps.Restart();
                 if (_refreshHardware) _hardware.Refresh();
+                refreshMs = steps.ElapsedMilliseconds;
 
                 // 3. Engine tick
+                _tickStep = "fan engine";
+                steps.Restart();
                 _engine.Tick();
+                engineMs = steps.ElapsedMilliseconds;
                 _consecutiveFailures = 0;
             }
             catch (Exception ex)
@@ -143,8 +185,18 @@ public sealed class EngineHost : IDisposable
             // 5. State file for ESP32PcStats
             if (_stateFile != null)
             {
+                _tickStep = "state file";
+                steps.Restart();
                 float? mix = _engine.TryReadSource("mix", out float mixValue) ? mixValue : null;
                 _stateFile.Write(_engine, _rgb, mix);
+                stateMs = steps.ElapsedMilliseconds;
+            }
+            _tickStep = "idle";
+
+            long tickMs = (long)(DateTime.UtcNow - tickStart).TotalMilliseconds;
+            if (tickMs > 2000)
+            {
+                _logger.Log($"Slow tick: {tickMs} ms (config reload {reloadMs}, hardware refresh {refreshMs}, fan engine {engineMs}, state file {stateMs}).");
             }
 
             // 6. Console status line in console mode
@@ -170,26 +222,19 @@ public sealed class EngineHost : IDisposable
                 }
             }
 
-            try
-            {
-                // Hardware refresh takes ~0.5 s; subtract it so ticks stay on the configured period.
-                int remaining = _tickMs - (int)(DateTime.UtcNow - tickStart).TotalMilliseconds;
-                await Task.Delay(Math.Max(remaining, 50), cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                break;
-            }
+            // Subtract the tick's own time so ticks stay on the configured period.
+            int remaining = _tickMs - (int)(DateTime.UtcNow - tickStart).TotalMilliseconds;
+            if (cancellationToken.WaitHandle.WaitOne(Math.Max(remaining, 50))) break;
         }
 
         _stopped = true;
         try
         {
-            await rgbLoop;
+            rgbLoop.Wait();
         }
         catch (Exception ex)
         {
-            _logger.Log($"RGB loop ended with error: {ex.Message}");
+            _logger.Log($"RGB loop ended with error: {(ex as AggregateException)?.InnerException?.Message ?? ex.Message}");
         }
 
         ShutdownAll();

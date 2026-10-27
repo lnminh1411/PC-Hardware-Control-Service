@@ -31,6 +31,8 @@ public sealed class CommandProcessor
     private readonly SensorFeedHub? _sensors;
     private readonly IProcessActivity? _processes;
     private readonly IPowerRequests? _power;
+    private readonly IPowerPlans? _plans;
+    private readonly Func<PowerConfig> _powerConfig;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="CommandProcessor"/> class.
@@ -38,13 +40,16 @@ public sealed class CommandProcessor
     /// <param name="persisted">Where Zero RPM toggles and brightness are saved; null = not saved.</param>
     /// <param name="displays">Monitor control; null = display commands report it is off.</param>
     public CommandProcessor(IFanControl fans, IRgbControl rgb, Func<IpcConfig> ipcConfig, IClock clock, PersistedSettings? persisted = null, IDisplayControl? displays = null, ILassoControl? lasso = null, SensorFeedHub? sensors = null,
-        IProcessActivity? processes = null, IPowerRequests? power = null)
+        IProcessActivity? processes = null, IPowerRequests? power = null,
+        IPowerPlans? plans = null, Func<PowerConfig>? powerConfig = null)
     {
         _displays = displays;
         _lasso = lasso;
         _sensors = sensors;
         _processes = processes;
         _power = power;
+        _plans = plans;
+        _powerConfig = powerConfig ?? (() => new PowerConfig());
         _fans = fans;
         _rgb = rgb;
         _ipcConfig = ipcConfig;
@@ -87,6 +92,7 @@ public sealed class CommandProcessor
                 "lasso" => HandleLasso(tokens),
                 "eco" => HandleEco(tokens),
                 "proc" => HandleProc(tokens),
+                "power" => HandlePower(tokens),
                 "release" => HandleGenericRelease(tokens),
                 _ => Error($"Unknown command '{tokens[0]}'.")
             };
@@ -409,8 +415,45 @@ public sealed class CommandProcessor
         return Ok(new { processes = _processes.Top(n).Select(p => new { exe = p.Exe, cores = Math.Round(p.Cores, 2), instances = p.Instances }) });
     }
 
-    private static object PowerDto(PowerRequestState s) => new
+    /// <summary>"power plan": list; "power plan night|day": the configured plans; "power plan &lt;name|guid&gt;": any plan.</summary>
+    private string HandlePower(string[] tokens)
     {
+        if (tokens.Length < 2 || !tokens[1].Equals("plan", StringComparison.OrdinalIgnoreCase)) return Error("Usage: power plan [night|day|<name|guid>]");
+        if (_plans == null) return Error("Power plan control is off.");
+        try
+        {
+            if (tokens.Length == 2)
+            {
+                return Ok(new { plans = _plans.List().Select(p => new { name = p.Name, guid = p.Guid, active = p.Active }) });
+            }
+            string target = string.Join(' ', tokens.Skip(2));
+            var cfg = _powerConfig();
+            if (target.Equals("night", StringComparison.OrdinalIgnoreCase)) target = cfg.NightPlan;
+            else if (target.Equals("day", StringComparison.OrdinalIgnoreCase)) target = cfg.DayPlan;
+            var plan = _plans.Set(target);
+            return Ok(new { plan = plan.Name, guid = plan.Guid });
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            return Error(ex.Message);
+        }
+    }
+
+    private string? PlanName()
+    {
+        try
+        {
+            return _plans?.Active?.Name;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    private static object PowerDto(PowerRequestState s, string? plan) => new
+    {
+        plan,
         display = s.Count("DISPLAY"),
         displayBy = s.First("DISPLAY"),
         system = s.Count("SYSTEM"),
@@ -748,7 +791,7 @@ public sealed class CommandProcessor
             Devices: devices);
 
         DisplaysView? displays = _displays == null ? null : new DisplaysView(_displays.Status, _displays.Displays);
-        return new StateDto(fanDict, rgbState, displays, _lasso == null ? null : LassoDto(_lasso.State), _power == null ? null : PowerDto(_power.State));
+        return new StateDto(fanDict, rgbState, displays, _lasso == null ? null : LassoDto(_lasso.State), _power == null ? null : PowerDto(_power.State, PlanName()));
     }
 
     private static string Ok(object? data)

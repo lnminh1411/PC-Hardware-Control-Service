@@ -38,6 +38,9 @@ Names are case-insensitive. `<fan>` = a fan key from config or `all`. `<group>` 
 | `eco on <exe>` | Windows efficiency mode (EcoQoS: low clocks, E-cores preferred) on every instance, now and for instances started later (swept every `lasso.ecoSweepS`, 10 s). Memory only: gone on service restart |
 | `eco off <exe\|all>` | gives each process back the efficiency setting it had before |
 | `eco list` | exes held in efficiency mode |
+| `power plan` | Windows power plans: `[{name, guid, active}]` |
+| `power plan night` / `power plan day` | switches to `power.nightPlan` ("PcHwCtl Night") / `power.dayPlan` ("High performance") |
+| `power plan <name\|guid>` | switches to any plan, by exact name (case-insensitive) or GUID |
 | `proc top [n]` | the n (default 5, max 50) busiest exes over the last second: `[{exe, cores, instances}]`, `cores` 1.0 = one core busy, summed over instances. Includes system and kept processes |
 | `get sensors` | latest sensor feed snapshot as JSON: `{seq, ts, values: {cpu_temp: 41.8, gpu1_fan: null, ...}}` |
 | `subscribe sensors` | after the ack line, the server pushes every sensor feed snapshot as text, see [Sensor feed](#sensor-feed) |
@@ -121,6 +124,32 @@ PcHwCtl reports; the board owns thresholds, hysteresis and timers.
   - EXECUTION: an app asks to keep running.
   - Feed keys `disp_req`, `sys_req`, `exec_req` (count, -1 unknown) plus `*_by` (first requester). `get state` has `"power": {display, displayBy, system, systemBy, execution, executionBy}`. State file: `hw.disp_req`, `hw.sys_req`, `hw.exec_req` (+ `_by`).
   - `claude.exe` holds an EXECUTION request all the time, so the board needs its own ignore list for `exec_req`.
+- **Power plan:** the active plan is the feed text key `power_plan`, `get state` `power.plan` and state file `hw.plan`. Set with `power plan night|day`.
+
+### The PcHwCtl Night plan
+
+A copy of Power saver, created on this PC (GUID `3ceb8c3b-ac62-40f4-96ea-7268c04b5a42`). Measured 2026-10-27/28, CPU package power: ~29.5 W normal, 15.7-16.1 W with this plan plus Low Power Mode.
+
+| Setting | Value | Why |
+|---|---|---|
+| Maximum processor state (E-cores, P-cores via class 1, class 2) | 5 % | ~450 MHz, the chip's floor; 1 % and 0 % give the same |
+| Core parking max/min cores (all 20) | 50 % | 10 of 20 awake, Windows picks which and moves them |
+| Core parking min cores, P-cores (class 1) | 0 % | Windows may park P-cores too |
+| Heterogeneous policy / class-1 thread thresholds / latency hint min unparked | 0 / 254 / 50 | Balanced's values. Power saver's (4 / 255 / 0) keep every P-core parked, which starves the PC |
+| PCIe link state power management | Maximum power savings | needs native ASPM on in the BIOS |
+| Sleep / hibernate | never | the board's timers decide |
+| Display off | 15 min | |
+
+Lessons:
+
+- Windows applies a processor cap only on a plan switch. Editing the cap into the active High performance plan did nothing, so the caps need a plan of their own.
+- The plain parking setting counts all 20 cores, not one core type.
+- Max cores 0 % for both core types, with the 5 % cap, made the PC unusable (fixed in Safe Mode).
+- At 6 of 20 cores awake and 450 MHz, PcHwCtl missed its fan tick and its watchdog restarted it. That led to the dedicated fan thread below.
+
+### Fan tick priority
+
+The service runs at High priority and opts out of Windows efficiency mode. The fan loop has its own thread at Highest priority, off the thread pool, so busy sensor reads and pipe clients can't delay it. RGB frames and the slow background CPU sensor read run below normal. A tick over 2 s logs its steps (config reload, hardware refresh, fan engine, state file). The watchdog's 10 s message names the step it was stuck in.
 
 ## Zero RPM (GPU fans)
 

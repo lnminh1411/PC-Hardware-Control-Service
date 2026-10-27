@@ -33,6 +33,9 @@ public sealed class StateFileWriter
     /// <summary>Power requests as hw.disp_req, hw.sys_req, hw.exec_req (+ _by); null = none.</summary>
     public IPowerRequests? Power { get; set; }
 
+    /// <summary>Active power plan as hw.plan; null = none.</summary>
+    public IPowerPlans? Plans { get; set; }
+
     public void Write(IFanControl fans, IRgbControl? rgb, float? mixTemp)
     {
         var displays = Displays;
@@ -57,6 +60,15 @@ public sealed class StateFileWriter
             {
                 Add(sb, $"hw.rgb.{Key(group)}", state.OverrideRule ?? state.Rule);
             }
+        }
+
+        try
+        {
+            if (Plans?.Active is { } plan) Add(sb, "hw.plan", plan.Name);
+        }
+        catch (InvalidOperationException)
+        {
+            // Plan not readable this tick.
         }
 
         if (Power?.State is { } power)

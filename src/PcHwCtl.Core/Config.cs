@@ -1,3 +1,4 @@
+using PcHwCtl.Core.Activity;
 using PcHwCtl.Core.Display;
 using PcHwCtl.Core.Lasso;
 using PcHwCtl.Core.Rgb;
@@ -20,6 +21,7 @@ public sealed class Config
     public DisplaysConfig Displays { get; set; } = new();
     public LassoConfig Lasso { get; set; } = new();
     public FeedConfig Feed { get; set; } = new();
+    public PowerConfig Power { get; set; } = new();
 }
 
 public sealed class SensorConfig

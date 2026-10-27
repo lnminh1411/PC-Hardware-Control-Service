@@ -280,6 +280,10 @@
     "requestsPollS": 5,
     "every": { "Cpu": 1000, "Memory": 1000 }
   },
+  "power": {
+    "nightPlan": "PcHwCtl Night",
+    "dayPlan": "High performance"
+  },
   "lasso": {
     "enabled": true,
     "ini": "C:\\ProgramData\\ProcessLasso\\config\\prolasso.ini",
