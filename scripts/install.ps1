@@ -60,6 +60,16 @@ if ($svc) {
     }
 }
 
+# Display agents (pchwctl display-agent in the user's session) run from the install directory and would lock it.
+$installedExe = Join-Path $InstallDir "pchwctl.exe"
+Get-Process -Name "pchwctl" -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -eq $installedExe } |
+    ForEach-Object {
+        Write-Host "Stopping leftover pchwctl process $($_.Id) (session $($_.SessionId))..."
+        Stop-Process -Id $_.Id -Force
+        $_.WaitForExit(5000) | Out-Null
+    }
+
 # 3. Copy publish\* to C:\Program Files\PcHwCtl\ (create, overwrite)
 $publishDir = Join-Path $RepoRoot "publish"
 if (-not (Test-Path -LiteralPath $publishDir)) {

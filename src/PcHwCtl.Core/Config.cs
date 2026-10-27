@@ -1,3 +1,4 @@
+using PcHwCtl.Core.Display;
 using PcHwCtl.Core.Rgb;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -14,6 +15,7 @@ public sealed class Config
     public RgbConfig Rgb { get; set; } = new();
     public DevicesConfig Devices { get; set; } = new();
     public IpcConfig Ipc { get; set; } = new();
+    public DisplaysConfig Displays { get; set; } = new();
 }
 
 public sealed class SensorConfig
@@ -331,6 +333,32 @@ public static class ConfigLoader
 
         // 4. RGB groups and rules
         errors.AddRange(RgbConfigValidator.Validate(config.Rgb, config));
+
+        // 5. Displays
+        if (config.Displays.PollS < 1)
+        {
+            errors.Add($"Displays pollS {config.Displays.PollS} must be at least 1.");
+        }
+        foreach (var (model, d) in config.Displays.Models)
+        {
+            bool known = d.Power.ToLowerInvariant() is "none" or "ddc-power" or "ddc-input";
+            if (!known)
+            {
+                errors.Add($"Display '{model}' power '{d.Power}' must be none, ddc-power or ddc-input.");
+            }
+            if (string.Equals(d.Power, "ddc-power", StringComparison.OrdinalIgnoreCase) && (d.PowerOff < 2 || d.PowerOff > 5))
+            {
+                errors.Add($"Display '{model}' powerOff {d.PowerOff} must be a VCP 0xD6 off value, 2-5.");
+            }
+            if (string.Equals(d.Power, "ddc-input", StringComparison.OrdinalIgnoreCase) && !DisplayController.TryParseCode(d.StandbyInput, out _))
+            {
+                errors.Add($"Display '{model}' power ddc-input needs standbyInput, e.g. \"0x01\".");
+            }
+            if (d.ActiveInput != null && !DisplayController.TryParseCode(d.ActiveInput, out _))
+            {
+                errors.Add($"Display '{model}' activeInput '{d.ActiveInput}' is not a number.");
+            }
+        }
 
         if (errors.Count > 0)
         {

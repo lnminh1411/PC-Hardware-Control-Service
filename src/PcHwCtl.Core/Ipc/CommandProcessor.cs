@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using PcHwCtl.Core.Control;
+using PcHwCtl.Core.Display;
 using PcHwCtl.Core.Rgb;
 
 namespace PcHwCtl.Core.Ipc;
@@ -22,13 +23,16 @@ public sealed class CommandProcessor
     private readonly Func<IpcConfig> _ipcConfig;
     private readonly IClock _clock;
     private readonly PersistedSettings? _persisted;
+    private readonly IDisplayControl? _displays;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="CommandProcessor"/> class.
     /// </summary>
     /// <param name="persisted">Where Zero RPM toggles and brightness are saved; null = not saved.</param>
-    public CommandProcessor(IFanControl fans, IRgbControl rgb, Func<IpcConfig> ipcConfig, IClock clock, PersistedSettings? persisted = null)
+    /// <param name="displays">Monitor control; null = display commands report it is off.</param>
+    public CommandProcessor(IFanControl fans, IRgbControl rgb, Func<IpcConfig> ipcConfig, IClock clock, PersistedSettings? persisted = null, IDisplayControl? displays = null)
     {
+        _displays = displays;
         _fans = fans;
         _rgb = rgb;
         _ipcConfig = ipcConfig;
@@ -64,6 +68,9 @@ public sealed class CommandProcessor
                 "get" => HandleGet(tokens),
                 "fan" => HandleFan(tokens),
                 "rgb" => HandleRgb(tokens),
+                "display" => _displays == null
+                    ? Error("Display control is off (config displays.enabled).")
+                    : DisplayCommands.Execute(_displays, tokens[1..]),
                 "release" => HandleGenericRelease(tokens),
                 _ => Error($"Unknown command '{tokens[0]}'.")
             };
@@ -617,7 +624,8 @@ public sealed class CommandProcessor
             Groups: rgbGroups,
             Devices: devices);
 
-        return new StateDto(fanDict, rgbState);
+        DisplaysView? displays = _displays == null ? null : new DisplaysView(_displays.Status, _displays.Displays);
+        return new StateDto(fanDict, rgbState, displays);
     }
 
     private static string Ok(object? data)
@@ -656,7 +664,8 @@ public sealed class CommandProcessor
 /// <summary>Root state data transfer object.</summary>
 public sealed record StateDto(
     [property: JsonPropertyName("fans")] IReadOnlyDictionary<string, FanStateDto> Fans,
-    [property: JsonPropertyName("rgb")] RgbStateDto Rgb);
+    [property: JsonPropertyName("rgb")] RgbStateDto Rgb,
+    [property: JsonPropertyName("displays")] DisplaysView? Displays = null);
 
 /// <summary>Fan state data transfer object.</summary>
 public sealed record FanStateDto(

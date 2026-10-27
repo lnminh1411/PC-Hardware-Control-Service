@@ -257,5 +257,20 @@
     "overrideTtlS": 60,
     "maxTtlS": 3600,
     "allowAccount": "NT AUTHORITY\\LocalService"
+  },
+  "displays": {
+    "enabled": true,
+    "pollS": 5,
+    "models": {
+      "DELL E1715S": {
+        "power": "ddc-power",
+        "powerOff": 4
+      },
+      "MSI PRO MP275": {
+        "power": "ddc-input",
+        "standbyInput": "0x01",
+        "activeInput": "0x11"
+      }
+    }
   }
 }

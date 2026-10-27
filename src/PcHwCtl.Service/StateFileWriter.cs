@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using PcHwCtl.Core.Control;
+using PcHwCtl.Core.Display;
 
 namespace PcHwCtl.Service;
 
@@ -25,8 +26,12 @@ public sealed class StateFileWriter
         _log = log;
     }
 
+    /// <summary>Monitors to list as hw.mon.*; null = none.</summary>
+    public IDisplayControl? Displays { get; set; }
+
     public void Write(IFanControl fans, IRgbControl? rgb, float? mixTemp)
     {
+        var displays = Displays;
         var sb = new StringBuilder();
         foreach (var (name, state) in fans.States)
         {
@@ -47,6 +52,20 @@ public sealed class StateFileWriter
             foreach (var (group, state) in rgb.Groups)
             {
                 Add(sb, $"hw.rgb.{Key(group)}", state.OverrideRule ?? state.Rule);
+            }
+        }
+
+        if (displays != null)
+        {
+            var monitors = displays.Displays;
+            Add(sb, "hw.mon.count", monitors.Count.ToString(CultureInfo.InvariantCulture));
+            foreach (var m in monitors)
+            {
+                string k = $"hw.mon.{m.Id}";
+                Add(sb, $"{k}.name", m.Name);
+                Add(sb, $"{k}.main", m.Main ? "1" : "0");
+                Add(sb, $"{k}.bright", m.Bright.ToString(CultureInfo.InvariantCulture));
+                Add(sb, $"{k}.power", m.Power.ToString(CultureInfo.InvariantCulture));
             }
         }
 

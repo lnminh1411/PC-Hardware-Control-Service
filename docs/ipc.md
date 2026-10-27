@@ -24,6 +24,11 @@ Names are case-insensitive. `<fan>` = a fan key from config or `all`. `<group>` 
 | `rgb mode <group> <off\|static\|breathing\|rainbow\|gradient> [#RRGGBB] [ttl]` | rule override; color used by static/breathing |
 | `rgb brightness <0-100>` | global brightness. Saved: survives restarts and reloads |
 | `rgb release <group>` | drop the override |
+| `display list` | monitors, numbered from the left: id, name, main, bright %, power (1 on, 0 off, -1 unknown), input, powerMethod |
+| `display bright <n\|all> <0-100>` | DDC/CI brightness |
+| `display power <n\|all> <on\|off>` | per-monitor power through the model's method (config `displays.models`); `all` skips monitors without one |
+| `display input <n\|all> <code>` | input source, e.g. `0x11` |
+| `display sleep` / `display wake` | Windows display off for every monitor / wake with a 1 px mouse nudge |
 | `subscribe` | after the ack line, the server pushes one `get state` style line per tick until the client disconnects |
 
 ## State
@@ -50,6 +55,10 @@ Names are case-insensitive. `<fan>` = a fan key from config or `all`. `<group>` 
 | Saved in `C:\ProgramData\PcHwCtl\settings.json`, reapplied at start and after every config reload | Memory only, gone on restart |
 |---|---|
 | `fan zerorpm`, `rgb brightness` | `fan set` (ttl), `fan curve`, `rgb set`, `rgb mode` |
+
+## Displays
+
+Monitor control runs in a user-session agent the service starts itself ([protocols/ddc-ci.md](protocols/ddc-ci.md)). `get state` carries `"displays": { "status": null, "monitors": [...] }`; `status` says why when the agent is not reachable. State file: `hw.mon.count`, `hw.mon.<n>.name|main|bright|power`, the keys of the board's old `mon.*` feed under `hw.`.
 
 ## Zero RPM (GPU fans)
 
