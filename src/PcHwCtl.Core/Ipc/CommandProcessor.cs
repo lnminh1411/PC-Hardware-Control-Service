@@ -33,6 +33,8 @@ public sealed class CommandProcessor
     private readonly IPowerRequests? _power;
     private readonly IPowerPlans? _plans;
     private readonly Func<PowerConfig> _powerConfig;
+    private readonly IPowerActions? _actions;
+    private readonly IPowerStatus? _status;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="CommandProcessor"/> class.
@@ -41,8 +43,11 @@ public sealed class CommandProcessor
     /// <param name="displays">Monitor control; null = display commands report it is off.</param>
     public CommandProcessor(IFanControl fans, IRgbControl rgb, Func<IpcConfig> ipcConfig, IClock clock, PersistedSettings? persisted = null, IDisplayControl? displays = null, ILassoControl? lasso = null, SensorFeedHub? sensors = null,
         IProcessActivity? processes = null, IPowerRequests? power = null,
-        IPowerPlans? plans = null, Func<PowerConfig>? powerConfig = null)
+        IPowerPlans? plans = null, Func<PowerConfig>? powerConfig = null, IPowerActions? actions = null,
+        IPowerStatus? status = null)
     {
+        _actions = actions;
+        _status = status;
         _displays = displays;
         _lasso = lasso;
         _sensors = sensors;
@@ -415,10 +420,17 @@ public sealed class CommandProcessor
         return Ok(new { processes = _processes.Top(n).Select(p => new { exe = p.Exe, cores = Math.Round(p.Cores, 2), instances = p.Instances }) });
     }
 
-    /// <summary>"power plan": list; "power plan night|day": the configured plans; "power plan &lt;name|guid&gt;": any plan.</summary>
+    /// <summary>"power plan": list; "power plan night|day": the configured plans; "power plan &lt;name|guid&gt;": any plan.
+    /// "power caps" and "power do &lt;action&gt;": sleep, hibernate, restart, shutdown, lock. "power status": going, last down,
+    /// wake, updates, last power do.</summary>
     private string HandlePower(string[] tokens)
     {
-        if (tokens.Length < 2 || !tokens[1].Equals("plan", StringComparison.OrdinalIgnoreCase)) return Error("Usage: power plan [night|day|<name|guid>]");
+        const string usage = "Usage: power plan [night|day|<name|guid>] | power caps | power do <sleep|hibernate|restart|shutdown|lock> [delayMs] | power status";
+        if (tokens.Length < 2) return Error(usage);
+        string sub = tokens[1].ToLowerInvariant();
+        if (sub == "status") return tokens.Length != 2 ? Error(usage) : _status == null ? Error("Power status is off.") : Ok(StatusDto(_status.Status));
+        if (sub is "caps" or "do") return HandlePowerAction(tokens, usage);
+        if (sub != "plan") return Error(usage);
         if (_plans == null) return Error("Power plan control is off.");
         try
         {
@@ -438,6 +450,41 @@ public sealed class CommandProcessor
             return Error(ex.Message);
         }
     }
+
+    private string HandlePowerAction(string[] tokens, string usage)
+    {
+        if (_actions == null) return Error("Power actions are off.");
+        try
+        {
+            if (tokens[1].Equals("caps", StringComparison.OrdinalIgnoreCase))
+            {
+                if (tokens.Length != 2) return Error(usage);
+                var caps = _actions.Caps();
+                return Ok(new { sleep = caps.Sleep, hibernate = caps.Hibernate });
+            }
+            if (tokens.Length is < 3 or > 4 || !Enum.TryParse<PowerAction>(tokens[2], true, out var action) || !Enum.IsDefined(action) || int.TryParse(tokens[2], out _))
+                return Error(usage);
+            int delayMs = 0;
+            if (tokens.Length == 4 && (!int.TryParse(tokens[3], NumberStyles.None, CultureInfo.InvariantCulture, out delayMs) || delayMs > 10000))
+                return Error("delayMs is 0-10000.");
+            _actions.Do(action, delayMs);
+            return Ok(new { action = action.ToString().ToLowerInvariant(), accepted = true });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Error(ex.Message);
+        }
+    }
+
+    private static object StatusDto(PowerStatus s) => new
+    {
+        going = new { kind = s.Going.Kind, by = s.Going.By, why = s.Going.Why, code = s.Going.Code, user = s.Going.User, id = s.Going.Id,
+            at = s.Going.Kind == "none" ? (DateTime?)null : s.Going.AtUtc },
+        lastDown = new { kind = s.LastDown.Kind, at = s.LastDown.At, by = s.LastDown.By, why = s.LastDown.Why },
+        wake = s.Wake == null ? null : new { from = s.Wake.From, at = s.Wake.At, sleptAt = s.Wake.SleptAt, by = s.Wake.By },
+        update = new { pending = s.Update.Pending, pendingBy = s.Update.PendingBy, running = s.Update.Running },
+        lastDo = s.LastDo == null ? null : new { action = s.LastDo.Action, outcome = s.LastDo.Outcome, why = s.LastDo.Why, at = s.LastDo.AtUtc }
+    };
 
     private string? PlanName()
     {

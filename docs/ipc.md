@@ -41,6 +41,9 @@ Names are case-insensitive. `<fan>` = a fan key from config or `all`. `<group>` 
 | `power plan` | Windows power plans: `[{name, guid, active}]` |
 | `power plan night` / `power plan day` | switches to `power.nightPlan` ("PcHwCtl Night") / `power.dayPlan` ("High performance") |
 | `power plan <name\|guid>` | switches to any plan, by exact name (case-insensitive) or GUID |
+| `power caps` | `{sleep, hibernate}`: whether the PC can sleep, and whether hibernation is on (hiberfil.sys present) |
+| `power do <sleep\|hibernate\|restart\|shutdown\|lock> [delayMs]` | accepted: `{action, accepted:true}`, the action runs as SYSTEM after `delayMs` (0-10000). Declined: `ok:false` and the reason in `error` (see [Power actions and events](#power-actions-and-events)) |
+| `power status` | `{going, lastDown, wake, update, lastDo}`: why the PC is going down now, how it last went down, the last wake, Windows Update state, and the last `power do` |
 | `proc top [n]` | the n (default 5, max 50) busiest exes over the last second: `[{exe, cores, instances}]`, `cores` 1.0 = one core busy, summed over instances. Includes system and kept processes |
 | `get sensors` | latest sensor feed snapshot as JSON: `{seq, ts, values: {cpu_temp: 41.8, gpu1_fan: null, ...}}` |
 | `subscribe sensors` | after the ack line, the server pushes every sensor feed snapshot as text, see [Sensor feed](#sensor-feed) |
@@ -150,6 +153,42 @@ Lessons:
 ### Fan tick priority
 
 The service runs at High priority and opts out of Windows efficiency mode. The fan loop has its own thread at Highest priority, off the thread pool, so busy sensor reads and pipe clients can't delay it. RGB frames and the slow background CPU sensor read run below normal. A tick over 2 s logs its steps (config reload, hardware refresh, fan engine, state file). The watchdog's 10 s message names the step it was stuck in.
+
+## Power actions and events
+
+PcHwCtl is the only program that sleeps, hibernates, restarts, shuts down or locks the PC for the board. The helper keeps the board's `!power` nonce and ack and calls `power do`.
+
+**`power do`:** PcHwCtl accepts or declines at once, then runs the action after `delayMs`, so a client can ack the board first (the helper passes 1500). Sleep and hibernate start at least 0.3 s after the reply; restart and shutdown force other sessions' apps closed, with the comment "Requested by the ESP32 board (PcHwCtl power do)" in event 1074; lock locks the console user's desktop. Declined, with the reason in `error`:
+
+| Reason | When |
+|---|---|
+| `A shutdown is already under way (by <exe>).` (or restart, update restart, ...) | a shutdown or restart was announced in the last 120 s |
+| `Already going to sleep.` / `hibernate` | sleep or hibernate while one is under way |
+| `Windows is installing updates.` | sleep or hibernate while `update_running` |
+| `This PC can't sleep.` / `Hibernation is off.` | from `power caps` |
+| `No user signed in at the console (...)` | lock with nobody signed in |
+| `InitiateShutdown: <Win32 message> (<code>)` | Windows refused, e.g. 1115 a shutdown is in progress, 1190 one is scheduled |
+
+With no delay, restart, shutdown and lock run before the reply, so a Win32 error declines them. What Windows refuses after the reply (a delayed action, or a driver vetoing sleep) shows as `power_do` = `<action> failed <why>`, e.g. `sleep failed SetSuspendState: ...`.
+
+**Keys.** The feed and the state file (with `hw.` in front) carry:
+
+| Key | Value |
+|---|---|
+| `going` | `none`, `shutdown`, `restart`, `update_shutdown`, `update_restart`, `sleep`, `hibernate`. Clears after 120 s, or on wake |
+| `going_by` | the exe that asked (event 1074), `board` for `power do` sleep/hibernate, else `-` |
+| `going_why` | Windows' reason title and the comment (`Other (Planned): Requested by the ESP32 board ...`), Kernel-Power's sleep reason (`Application API`, `Button or Lid`, ...) or kernel shutdown reason |
+| `going_code` | reason code decoded: `0x80020010 os/service_pack planned` |
+| `going_user` | the account it ran for, `NT AUTHORITY\SYSTEM` for services |
+| `going_id` (value) | the event's record id; changes for every new announcement |
+| `last_down` | how the PC went down before this boot: `shutdown`, `restart`, `update_shutdown`, `update_restart`, `unexpected`, `bluescreen`, `power_button`, `unknown` |
+| `last_down_at`, `last_down_by`, `last_down_why` | local `ddd HH:mm`; exe; reason with code, or `bugcheck 0x9f`, `power button held`, `lost power while sleep`, `lost power or stopped responding` |
+| `wake_from`, `wake_at`, `wake_by` | last wake since boot: `sleep`/`hibernate`, time, Windows' wake source (`Power Button`, `Device -USB Input Device`, `Unknown`) |
+| `update_pending` (value), `update_pending_by` | 1 when Windows wants a restart for updates; `wu` (Windows Update), `cbs` (servicing stack), `wu+cbs` |
+| `update_running` (value) | 1 while Windows installs updates with nobody signed in, after an update restart |
+| `power_do`, `power_do_at` | the last `power do`: `<action> accepted`, `<action> declined <why>`, `<action> failed <why>` |
+
+Sources: System log 1074 (who/why/code/comment/user), Kernel-Power 42 (entering sleep) and 109 (kernel shutdown, e.g. the power button, used when no 1074 came first), Kernel-Power 41 / EventLog 6008 at boot (unclean: bugcheck, power button, sleep in progress), Power-Troubleshooter 1 (wake source). `update_pending` reads the RebootRequired and RebootPending registry keys every 30 s; `update_running` looks for TiWorker, poqexec or SetupHost with no explorer every 5 s.
 
 ## Zero RPM (GPU fans)
 

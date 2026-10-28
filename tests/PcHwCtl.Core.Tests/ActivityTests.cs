@@ -32,6 +32,22 @@ public sealed class FakePlans : IPowerPlans
     }
 }
 
+public sealed class FakeActions : IPowerActions
+{
+    public bool Hibernate { get; set; } = true;
+    public List<PowerAction> Done { get; } = [];
+    public int LastDelayMs { get; private set; }
+
+    public PowerCaps Caps() => new(true, Hibernate);
+
+    public void Do(PowerAction action, int delayMs = 0)
+    {
+        LastDelayMs = delayMs;
+        if (action == PowerAction.Hibernate && !Hibernate) throw new InvalidOperationException("Hibernation is off.");
+        Done.Add(action);
+    }
+}
+
 public class ActivityTests
 {
     public const string Powercfg =
@@ -142,4 +158,101 @@ public class ActivityTests
         var off = new CommandProcessor(new IpcFakeFanControl(), new IpcFakeRgbControl(), () => new IpcConfig(), new IpcFakeClock());
         Assert.Contains("Power plan control is off", off.Execute("power plan night"));
     }
+
+    [Fact]
+    public void Test06_Ipc_PowerActions()
+    {
+        var actions = new FakeActions();
+        var proc = new CommandProcessor(new IpcFakeFanControl(), new IpcFakeRgbControl(), () => new IpcConfig(), new IpcFakeClock(),
+            null, null, null, null, null, null, null, null, actions);
+
+        Assert.Contains("\"sleep\":true,\"hibernate\":true", proc.Execute("power caps"));
+        Assert.Contains("\"action\":\"lock\",\"accepted\":true", proc.Execute("power do lock"));
+        Assert.Contains("\"action\":\"shutdown\"", proc.Execute("POWER DO Shutdown"));
+        Assert.Equal([PowerAction.Lock, PowerAction.Shutdown], actions.Done);
+        Assert.Contains("\"accepted\":true", proc.Execute("power do restart 1500"));
+        Assert.Equal(1500, actions.LastDelayMs);
+        Assert.Contains("delayMs is 0-10000", proc.Execute("power do restart 20000"));
+        Assert.Contains("delayMs is 0-10000", proc.Execute("power do restart -1"));
+        actions.Done.Clear();
+        actions.Done.AddRange([PowerAction.Lock, PowerAction.Shutdown]);
+
+        actions.Hibernate = false;
+        Assert.Contains("Hibernation is off", proc.Execute("power do hibernate"));
+        Assert.Contains("Usage: power", proc.Execute("power do"));
+        Assert.Contains("Usage: power", proc.Execute("power do nap"));
+        Assert.Contains("Usage: power", proc.Execute("power do 1"));
+        Assert.Contains("Usage: power", proc.Execute("power caps now"));
+        Assert.Equal(2, actions.Done.Count);
+
+        var off = new CommandProcessor(new IpcFakeFanControl(), new IpcFakeRgbControl(), () => new IpcConfig(), new IpcFakeClock());
+        Assert.Contains("Power actions are off", off.Execute("power do lock"));
+    }
+    [Fact]
+    public void Test07_PowerReasons()
+    {
+        Assert.Equal("shutdown.exe", PowerReasons.ProcessName(@"C:\WINDOWS\system32\shutdown.exe (DESKTOP-LNMINH)"));
+        Assert.Equal("my app.exe", PowerReasons.ProcessName(@"C:\Apps (x86)\my app.exe"));
+        Assert.Equal("", PowerReasons.ProcessName(" "));
+
+        Assert.Equal("restart", PowerReasons.ClassifyShutdown(@"C:\x\shutdown.exe (PC)", "restart", "0x800000ff", false));
+        Assert.Equal("shutdown", PowerReasons.ClassifyShutdown("pchwctl.exe", "power off", "0x80000000", false));
+        Assert.Equal("update_restart", PowerReasons.ClassifyShutdown(@"C:\x\MoUsoCoreWorker.exe (PC)", "restart", "0x80020010", false));
+        Assert.Equal("update_shutdown", PowerReasons.ClassifyShutdown("explorer.exe", "power off", "0x80020003", false));
+        Assert.Equal("update_restart", PowerReasons.ClassifyShutdown("explorer.exe", "restart", "0x0", true));
+        Assert.Equal("restart", PowerReasons.ClassifyShutdown("explorer.exe", "restart", "0x00030002", false));
+
+        Assert.Equal("0x80020010 os/service_pack planned", PowerReasons.DescribeCode(0x80020010));
+        Assert.Equal("0x800000ff other/none planned", PowerReasons.DescribeCode(0x800000ff));
+        Assert.Equal("0x00050013 system/security", PowerReasons.DescribeCode(0x00050013));
+
+        Assert.Equal(("bluescreen", "bugcheck 0x9f"), PowerReasons.Unexpected(0x9f, 0, 0, false));
+        Assert.Equal(("power_button", "power button held"), PowerReasons.Unexpected(0, 0, 123, false));
+        Assert.Equal(("unexpected", "lost power while hibernate"), PowerReasons.Unexpected(0, 5, 0, false));
+        Assert.Equal(("unexpected", "lost power or stopped responding"), PowerReasons.Unexpected(0, 0, 0, false));
+
+        Assert.Equal("Other (Planned)", PowerReasons.Why("Other (Planned)", ""));
+        Assert.Equal("Other (Planned): from the board", PowerReasons.Why("Other (Planned)", " from  the\nboard "));
+        Assert.Equal("-", PowerReasons.Why(null, null));
+    }
+
+    [Fact]
+    public void Test08_PowerStatus_KeysAndIpc()
+    {
+        var at = new DateTime(2026, 10, 28, 10, 0, 0, DateTimeKind.Utc);
+        var status = new PowerStatus(
+            new GoingState("update_restart", "MoUsoCoreWorker.exe", "Operating System: Service pack (Planned)", "0x80020010 os/service_pack planned", @"NT AUTHORITY\SYSTEM", 42, at),
+            new LastDown("bluescreen", at, "-", "bugcheck 0x9f"),
+            null,
+            new UpdateState(true, "wu", false),
+            new PowerDoResult("hibernate", "declined", "Hibernation is off.", at));
+        var values = new List<KeyValuePair<string, double?>>();
+        var texts = new List<KeyValuePair<string, string>>();
+        PowerStatusKeys.AddTo(status, values, texts);
+        var t = texts.ToDictionary(k => k.Key, k => k.Value);
+        var v = values.ToDictionary(k => k.Key, k => k.Value);
+        Assert.Equal("update_restart", t["going"]);
+        Assert.Equal("MoUsoCoreWorker.exe", t["going_by"]);
+        Assert.Equal(42, v["going_id"]);
+        Assert.Equal("bluescreen", t["last_down"]);
+        Assert.Equal("-", t["wake_by"]);
+        Assert.Equal(1, v["update_pending"]);
+        Assert.Equal("wu", t["update_pending_by"]);
+        Assert.Equal("hibernate declined Hibernation is off.", t["power_do"]);
+        Assert.Equal(at.ToLocalTime().ToString("ddd HH:mm", System.Globalization.CultureInfo.InvariantCulture), t["last_down_at"]);
+
+        var proc = new CommandProcessor(new IpcFakeFanControl(), new IpcFakeRgbControl(), () => new IpcConfig(), new IpcFakeClock(),
+            null, null, null, null, null, null, null, null, null, new FakeStatus(status));
+        string json = proc.Execute("power status");
+        Assert.Contains("\"kind\":\"update_restart\"", json);
+        Assert.Contains("\"pendingBy\":\"wu\"", json);
+        Assert.Contains("\"outcome\":\"declined\"", json);
+        Assert.Contains("\"wake\":null", json);
+        Assert.Contains("Power status is off", new CommandProcessor(new IpcFakeFanControl(), new IpcFakeRgbControl(), () => new IpcConfig(), new IpcFakeClock()).Execute("power status"));
+    }
+}
+
+public sealed class FakeStatus(PowerStatus status) : IPowerStatus
+{
+    public PowerStatus Status => status;
 }
