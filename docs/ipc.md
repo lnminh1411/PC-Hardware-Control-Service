@@ -134,11 +134,11 @@ A copy of Power saver, created on this PC (GUID `3ceb8c3b-ac62-40f4-96ea-7268c04
 |---|---|---|
 | Maximum processor state (E-cores, P-cores via class 1, class 2) | 30 % | caps the clock; 5 % (~450 MHz, the chip's floor) was too slow to use |
 | Minimum processor state (E-cores, P-cores via class 1) | 5 % | lets idle cores drop to the floor |
-| Core parking (every parking and unpark setting, AC and DC) | Balanced's | on AC Balanced keeps min cores at 100 %, so nothing parks; parking saved little next to the cap anyway |
+| Core parking (every parking and unpark setting, AC and DC) | Balanced's | Windows parks idle cores itself (Process Lasso showed 7 of 20 parked under Balanced) even with min cores at 100 %. High performance doesn't park |
 | Heterogeneous policy / class-1 thread thresholds / latency hint min unparked | 0 / 254 / 50 | Balanced's values. Power saver's (4 / 255 / 0) keep every P-core parked, which starves the PC |
 | PCIe link state power management | Maximum power savings | needs native ASPM on in the BIOS |
 | Sleep / hibernate | never | the board's timers decide |
-| Display off | 15 min | |
+| Display off | 5 min | the same as night mode's idle engage on the ESP32 board |
 
 Lessons:
 
