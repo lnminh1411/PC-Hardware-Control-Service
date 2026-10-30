@@ -70,6 +70,7 @@ public sealed class It5711Device : ILedDevice
 
     public bool Initialize()
     {
+        _device?.Dispose();   // again after a resume or a fault: drop the old handle first
         _device = _open();
         if (_device == null)
         {

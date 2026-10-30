@@ -33,8 +33,11 @@ public sealed class SliceAFakeLedDevice : ILedDevice
         Zones = zones;
     }
 
+    public int InitializeCount { get; private set; }
+
     public bool Initialize()
     {
+        InitializeCount++;
         if (ThrowOnInitialize) throw new InvalidOperationException("Device error on Initialize");
         if (FailInitialize) return false;
         Initialized = true;
@@ -567,5 +570,45 @@ public class RgbEngineTests
         var validator = RgbConfigValidator.Validate(
             new RgbConfig { DeviceFps = new(StringComparer.OrdinalIgnoreCase) { ["ene-*"] = 0 } }, new Config());
         Assert.Contains(validator, p => p.Contains("deviceFps", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Test12_ReinitializeAll_InitializesAgain_ResendsColors_FaultsFailures()
+    {
+        // After a resume every device runs Initialize again (ENE leaves direct mode in hibernate) and resends colors.
+        var good = new SliceAFakeLedDevice("good", new LedZone("z", 2));
+        var bad = new SliceAFakeLedDevice("bad", new LedZone("z", 2));
+        var clock = new SliceAFakeClock();
+        var config = new RgbConfig
+        {
+            Brightness = 100,
+            Groups = new Dictionary<string, RgbGroupConfig>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["main"] = new RgbGroupConfig { Zones = ["good/*", "bad/*"], Rule = new RgbRuleConfig { Type = "static", Color = "#102030" } }
+            }
+        };
+        var logs = new List<string>();
+        var engine = new RgbEngine(config, [good, bad], _ => null, clock, logs.Add);
+        engine.Tick();
+        Assert.Equal(1, good.InitializeCount);
+        good.ResetCallRecords();
+
+        bad.FailInitialize = true;
+        engine.ReinitializeAll();
+
+        Assert.Equal(2, good.InitializeCount);
+        Assert.True(good.InvalidateCalled);
+        Assert.Equal("ok", engine.DeviceStatus["good"]);
+        Assert.StartsWith("faulted", engine.DeviceStatus["bad"]);
+        Assert.Contains(logs, l => l.Contains("re-initialized after resume: good"));
+
+        clock.AdvanceSeconds(1);
+        engine.Tick();
+        Assert.NotEmpty(good.SetZoneCalls);   // colors resent although they did not change
+
+        bad.FailInitialize = false;
+        clock.AdvanceSeconds(11);
+        engine.Tick();
+        Assert.Equal("ok", engine.DeviceStatus["bad"]);
     }
 }

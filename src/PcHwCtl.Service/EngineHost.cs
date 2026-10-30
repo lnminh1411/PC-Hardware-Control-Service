@@ -136,12 +136,13 @@ public sealed class EngineHost : IDisposable
             DateTime tickStart = DateTime.UtcNow;
 
             // A gap far longer than the tick period means the PC slept: the board may have
-            // dropped PWM and RGB state, so write everything again.
+            // dropped PWM and RGB state, so write everything again. RGB devices are initialized again
+            // too: after hibernate the RAM's ENE controllers have left direct mode.
             if ((tickStart - lastTickStart).TotalMilliseconds > _tickMs * 3 + 2000)
             {
                 _logger.Log($"Resume detected ({(tickStart - lastTickStart).TotalSeconds:0} s gap), rewriting fans and RGB.");
                 _engine.ForceRewrite();
-                _rgb?.InvalidateAll();
+                _rgb?.ReinitializeAll();
             }
             lastTickStart = tickStart;
 

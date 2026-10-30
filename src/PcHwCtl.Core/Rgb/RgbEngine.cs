@@ -551,7 +551,56 @@ public sealed class RgbEngine : IRgbControl, IDisposable
     }
 
     /// <summary>
-    /// Invalidates all devices and clears frame color caches (typically called after system resume).
+    /// After a resume: runs every device's Initialize again, then resends all colors. Hibernate cuts the RAM's power,
+    /// so the ENE controllers come back in their own effect mode and ignore color writes until direct mode is set
+    /// again; resending colors alone looks fine (writes succeed) but changes nothing. A device that fails is marked
+    /// faulted and retried every 10 s like any other.
+    /// </summary>
+    public void ReinitializeAll()
+    {
+        lock (_gate)
+        {
+            var now = _clock.UtcNow;
+            var done = new List<string>();
+            foreach (var device in _devices)
+            {
+                var flusher = _flushers[device.Id];
+                string? fault;
+                try
+                {
+                    lock (flusher.DeviceLock)
+                    {
+                        fault = device.Initialize() ? null : "initialization failed";
+                        if (fault == null) device.Invalidate();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    fault = ex.Message;
+                }
+
+                if (fault == null)
+                {
+                    _deviceStatus[device.Id] = "ok";
+                    flusher.Healthy = true;
+                    done.Add(device.Id);
+                }
+                else
+                {
+                    _deviceStatus[device.Id] = $"faulted: {fault}";
+                    _lastInitAttempt[device.Id] = now;
+                    flusher.Healthy = false;
+                    _log($"RGB device '{device.Id}' faulted after resume: {fault}");
+                }
+            }
+
+            _groupColorCache.Clear();
+            if (done.Count > 0) _log($"RGB re-initialized after resume: {string.Join(", ", done)}.");
+        }
+    }
+
+    /// <summary>
+    /// Invalidates all devices and clears frame color caches.
     /// </summary>
     public void InvalidateAll()
     {
