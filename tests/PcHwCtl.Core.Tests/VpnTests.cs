@@ -27,6 +27,25 @@ public class VpnTests
     }
 
     [Fact]
+    public void Test05_InternetRoutesAndStack()
+    {
+        Assert.Equal(1UL << 32, VpnClassifier.RouteSize([0, 0, 0, 0]));
+        Assert.Equal(1UL << 31, VpnClassifier.RouteSize([128, 0, 0, 0]));
+        Assert.Equal(1UL, VpnClassifier.RouteSize([255, 255, 255, 255]));
+        Assert.True(VpnClassifier.IsInternetCoverage(VpnClassifier.RouteSize([0, 0, 0, 0])));
+        Assert.True(VpnClassifier.IsInternetCoverage(2 * VpnClassifier.RouteSize([128, 0, 0, 0])));   // 0/1 + 128/1
+        // WARP: /3, /3, /3, /4, /4, /4, /5 ... (everything but private ranges) is well over half
+        ulong warp = 3 * VpnClassifier.RouteSize([224, 0, 0, 0]) + 3 * VpnClassifier.RouteSize([240, 0, 0, 0]);
+        Assert.True(VpnClassifier.IsInternetCoverage(warp));
+        Assert.False(VpnClassifier.IsInternetCoverage(VpnClassifier.RouteSize([255, 192, 0, 0])));   // Tailscale 100.64.0.0/10
+
+        Assert.Equal("warp+vpn", VpnClassifier.Stack("warp", ["vpn", "none"]));
+        Assert.Equal("vpn+warp", VpnClassifier.Stack("vpn", ["warp", "vpn"]));
+        Assert.Equal("vpn", VpnClassifier.Stack("vpn", []));
+        Assert.Equal("none", VpnClassifier.Stack("none", ["warp"]));   // a tunnel losing the route carries nothing
+    }
+
+    [Fact]
     public void Test02_ParseTrace()
     {
         const string trace = "fl=123\nh=1.1.1.1\nip=104.28.1.2\nts=1761900000.1\nvisit_scheme=https\nloc=VN\ncolo=SGN\nwarp=on\ngateway=off\n";
@@ -41,7 +60,7 @@ public class VpnTests
     public void Test03_KeysAndIpc()
     {
         var at = new DateTime(2026, 10, 31, 1, 0, 0, DateTimeKind.Utc);
-        var status = new VpnStatus(new VpnCheck("warp", "Cloudflare WARP Interface Tunnel"), new ExitInfo("104.28.1.2", "VN", "on"), at, at);
+        var status = new VpnStatus(new VpnCheck("warp", "Cloudflare WARP Interface Tunnel", "warp+vpn"), new ExitInfo("104.28.1.2", "VN", "on"), at, at);
         var values = new List<KeyValuePair<string, double?>>();
         var texts = new List<KeyValuePair<string, string>>();
         VpnClassifier.AddTo(status, values, texts);
@@ -50,6 +69,7 @@ public class VpnTests
         Assert.Equal("Cloudflare WARP Interface Tunnel", t["vpn_by"]);
         Assert.Equal("VN", t["exit_loc"]);
         Assert.Equal("on", t["exit_warp"]);
+        Assert.Equal("warp+vpn", t["vpn_stack"]);
 
         texts.Clear();
         VpnClassifier.AddTo(VpnStatus.Unknown, values, texts);

@@ -483,6 +483,7 @@ public sealed class CommandProcessor
     {
         kind = s.Check.Kind,
         by = s.Check.By,
+        stack = s.Check.Stack,
         exit = s.Exit == null ? null : new { ip = s.Exit.Ip, loc = s.Exit.Loc, warp = s.Exit.Warp },
         checkedAt = s.CheckedUtc == DateTime.MinValue ? (DateTime?)null : s.CheckedUtc,
         tracedAt = s.TracedUtc

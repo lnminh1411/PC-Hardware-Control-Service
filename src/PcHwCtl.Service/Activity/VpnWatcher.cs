@@ -18,6 +18,8 @@ public sealed class VpnWatcher : IVpnStatus, IFeedSource, IDisposable
     private const uint ProbeAddress = 0x08080808;   // 8.8.8.8, same in either byte order
 
     [DllImport("iphlpapi.dll")] private static extern int GetBestInterface(uint destAddr, out uint bestIfIndex);
+    [DllImport("iphlpapi.dll")] private static extern int GetIpForwardTable(IntPtr table, ref int size, bool order);
+    private const int RowSize = 56;   // MIB_IPFORWARDROW: 14 DWORDs; dest, mask at 0 and 4, ifIndex at 16
 
     private readonly Func<VpnConfig> _config;
     private readonly Action<string> _log;
@@ -100,7 +102,7 @@ public sealed class VpnWatcher : IVpnStatus, IFeedSource, IDisposable
         VpnStatus old;
         lock (_lock) old = _status;
         bool changed = _first || check != old.Check;
-        if (changed) _log($"VPN: {check.Kind} ({check.By}).");
+        if (changed) _log($"VPN: {check.Kind} ({check.By}), stack {check.Stack}.");
 
         ExitInfo? exit = old.Exit;
         DateTime? traced = old.TracedUtc;
@@ -115,11 +117,15 @@ public sealed class VpnWatcher : IVpnStatus, IFeedSource, IDisposable
         lock (_lock) _status = new VpnStatus(check, exit, DateTime.UtcNow, traced);
     }
 
-    private static VpnCheck Check()
+    private VpnCheck Check()
     {
         if (GetBestInterface(ProbeAddress, out uint index) != 0) return new VpnCheck("none", "no route");
+        var routed = InternetRouteInterfaces();
+        VpnCheck? holder = null;
+        var others = new List<string>();
         foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
         {
+            if (ni.OperationalStatus != OperationalStatus.Up) continue;
             IPv4InterfaceProperties? v4;
             try
             {
@@ -129,11 +135,48 @@ public sealed class VpnWatcher : IVpnStatus, IFeedSource, IDisposable
             {
                 continue;
             }
-            if (v4 == null || v4.Index != index) continue;
+            if (v4 == null) continue;
             string kind = VpnClassifier.Kind(ni.Description, ni.Name, ni.NetworkInterfaceType == NetworkInterfaceType.Ppp);
-            return new VpnCheck(kind, ni.Description);
+            if (v4.Index == index) holder = new VpnCheck(kind, ni.Description);
+            else if (routed.Contains((uint)v4.Index)) others.Add(kind);
         }
-        return new VpnCheck("none", $"interface {index}");
+        holder ??= new VpnCheck("none", $"interface {index}");
+        return holder with { Stack = VpnClassifier.Stack(holder.Kind, others) };
+    }
+
+    /// <summary>Interfaces whose routes cover the internet (VpnClassifier.IsInternetCoverage), not just their own subnet.</summary>
+    private HashSet<uint> InternetRouteInterfaces()
+    {
+        var set = new HashSet<uint>();
+        var cover = new Dictionary<uint, ulong>();
+        int size = 0;
+        GetIpForwardTable(IntPtr.Zero, ref size, false);
+        if (size <= 0) return set;
+        IntPtr buf = Marshal.AllocHGlobal(size);
+        try
+        {
+            if (GetIpForwardTable(buf, ref size, false) != 0)
+            {
+                _log("VPN: GetIpForwardTable failed.");
+                return set;
+            }
+            int count = Marshal.ReadInt32(buf);
+            var mask = new byte[4];
+            for (int i = 0; i < count; i++)
+            {
+                IntPtr row = buf + 4 + i * RowSize;
+                Marshal.Copy(row + 4, mask, 0, 4);
+                uint ifIndex = (uint)Marshal.ReadInt32(row + 16);
+                cover[ifIndex] = cover.GetValueOrDefault(ifIndex) + VpnClassifier.RouteSize(mask);
+            }
+            foreach (var (ifIndex, addresses) in cover)
+                if (VpnClassifier.IsInternetCoverage(addresses)) set.Add(ifIndex);
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buf);
+        }
+        return set;
     }
 
     private ExitInfo? Trace()

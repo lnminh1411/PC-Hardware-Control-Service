@@ -44,7 +44,7 @@ Names are case-insensitive. `<fan>` = a fan key from config or `all`. `<group>` 
 | `power caps` | `{sleep, hibernate}`: whether the PC can sleep, and whether hibernation is on (hiberfil.sys present) |
 | `power do <sleep\|hibernate\|restart\|shutdown\|lock> [delayMs]` | accepted: `{action, accepted:true}`, the action runs as SYSTEM after `delayMs` (0-10000). Declined: `ok:false` and the reason in `error` (see [Power actions and events](#power-actions-and-events)) |
 | `power status` | `{going, lastDown, wake, update, lastDo}`: why the PC is going down now, how it last went down, the last wake, Windows Update state, and the last `power do` |
-| `vpn` | `{kind, by, exit:{ip, loc, warp}, checkedAt, tracedAt}`, see [VPN check](#vpn-check) |
+| `vpn` | `{kind, by, stack, exit:{ip, loc, warp}, checkedAt, tracedAt}`, see [VPN check](#vpn-check) |
 | `proc top [n]` | the n (default 5, max 50) busiest exes over the last second: `[{exe, cores, instances}]`, `cores` 1.0 = one core busy, summed over instances. Includes system and kept processes |
 | `get sensors` | latest sensor feed snapshot as JSON: `{seq, ts, values: {cpu_temp: 41.8, gpu1_fan: null, ...}}` |
 | `subscribe sensors` | after the ack line, the server pushes every sensor feed snapshot as text, see [Sensor feed](#sensor-feed) |
@@ -203,7 +203,9 @@ Is the PC's internet traffic going through a tunnel, and where does it come out?
 
 **Exit:** when the check's result changes (or the last trace failed), PcHwCtl fetches `https://www.cloudflare.com/cdn-cgi/trace` (5 s timeout; by name, because VPN clients such as SoftEther route 1.1.1.1 outside the tunnel): the public IP, its country, and Cloudflare's own `warp=on|plus|off`. This is PcHwCtl's only internet request; `vpn.trace: false` turns it off. `exit_loc` is how to tell WARP from a real VPN: with WARP it stays your own country.
 
-Feed and state file keys (`hw.` in the state file): `vpn` (none, warp, vpn), `vpn_by` (adapter description), `exit_ip`, `exit_loc` (country code), `exit_warp` (on, plus, off). `-` when unknown.
+**VPN + WARP:** `vpn` is the outer tunnel, the one holding the route. `vpn_stack` lists every tunnel whose routes cover at least half the IPv4 space (0.0.0.0/0, the 0/1 + 128/1 halves, or WARP's ~117 routes around private ranges), route holder first: `warp+vpn` = WARP runs through the VPN (the trace shows `warp=on` with the VPN server's country, since Cloudflare places you where WARP connects from), `vpn+warp` = the VPN runs through WARP (`warp=off`, the VPN server's IP). Tailscale without an exit node only routes 100.64.0.0/10 and stays out.
+
+Feed and state file keys (`hw.` in the state file): `vpn` (none, warp, vpn), `vpn_by` (adapter description), `vpn_stack` (e.g. `vpn`, `warp+vpn`, `vpn+warp`, `none`), `exit_ip`, `exit_loc` (country code), `exit_warp` (on, plus, off). `-` when unknown.
 
 Config: `"vpn": { "enabled": true, "trace": true, "settleS": 5 }` (settleS 1-60). Applies after a service restart.
 

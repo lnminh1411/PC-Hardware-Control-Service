@@ -16,9 +16,14 @@ public sealed class VpnConfig
     public int SettleS { get; set; } = 5;
 }
 
-/// <param name="Kind">none, warp or vpn.</param>
+/// <param name="Kind">none, warp or vpn: the adapter carrying the internet route (the outer tunnel).</param>
 /// <param name="By">Adapter description carrying the internet route, "-" when unknown.</param>
-public sealed record VpnCheck(string Kind, string By);
+/// <param name="Stack">Every tunnel with internet routes, route holder first: "warp+vpn" = WARP's tunnel runs through
+/// the VPN, "vpn+warp" = the VPN's runs through WARP. "none" when the route holder is no tunnel.</param>
+public sealed record VpnCheck(string Kind, string By, string Stack)
+{
+    public VpnCheck(string kind, string by) : this(kind, by, kind) { }
+}
 
 /// <param name="Warp">Cloudflare's warp field: on, plus, off.</param>
 public sealed record ExitInfo(string Ip, string Loc, string Warp);
@@ -54,6 +59,31 @@ public static class VpnClassifier
         return "none";
     }
 
+    /// <summary>Addresses a route covers: 2^(32 - prefix length). 0.0.0.0/0 = 2^32.</summary>
+    public static ulong RouteSize(byte[] mask)
+    {
+        int bits = 0;
+        foreach (byte b in mask) bits += System.Numerics.BitOperations.PopCount(b);
+        return 1UL << (32 - Math.Clamp(bits, 0, 32));
+    }
+
+    /// <summary>
+    /// An interface carries internet traffic when its routes cover at least half the IPv4 space: 0.0.0.0/0, the
+    /// 0/1 + 128/1 halves VPN clients add, or WARP's ~117 routes that cover everything but private ranges.
+    /// Tailscale without an exit node (100.64.0.0/10) stays far below.
+    /// </summary>
+    public static bool IsInternetCoverage(ulong addresses) => addresses >= 1UL << 31;
+
+    /// <summary>Route holder's kind first, then the other tunnels with internet routes, each kind once.</summary>
+    public static string Stack(string holderKind, IEnumerable<string> otherTunnelKinds)
+    {
+        if (holderKind == "none") return "none";
+        var kinds = new List<string> { holderKind };
+        foreach (string k in otherTunnelKinds)
+            if (k != "none") kinds.Add(k);
+        return string.Join('+', kinds.Distinct());
+    }
+
     /// <summary>Parses the trace's key=value lines; null when ip or loc is missing.</summary>
     public static ExitInfo? ParseTrace(string? text)
     {
@@ -72,6 +102,7 @@ public static class VpnClassifier
     {
         texts.Add(new("vpn", s.Check.Kind));
         texts.Add(new("vpn_by", PowerReasons.Clean(s.Check.By, 60)));
+        texts.Add(new("vpn_stack", s.Check.Stack));
         texts.Add(new("exit_ip", s.Exit?.Ip ?? "-"));
         texts.Add(new("exit_loc", s.Exit?.Loc ?? "-"));
         texts.Add(new("exit_warp", s.Exit?.Warp ?? "-"));
