@@ -2,13 +2,13 @@
 
 > **This is for my PC only.** Sensor IDs, fan curves, LED layouts and RGB protocols are hard-wired to one machine (Gigabyte B860M GAMING X WIFI6E, IT8696E SuperIO, IT5711 RGB Fusion 2, ENE DRAM, Intel Core Ultra 7 265K, AMD Radeon RX 6600, NVIDIA GeForce RTX 3050, DELL E1715S, MSI PRO MP275). Running it on other hardware can write to the wrong registers. Use it as reference, not as a drop-in tool.
 
-Windows service (LocalSystem) replacing FanControl and OpenRGB on my PC. Exposes a JSON-line named pipe `PcHwCtl` used by the ESP32 board helper. Companion project: [ESP32-PC-Control-System](https://github.com/lnminh1411/ESP32-PC-Control-System).
+Windows service (LocalSystem) replacing FanControl, OpenRGB and Twinkle Tray on my PC. Exposes a JSON-line named pipe `PcHwCtl` used by the ESP32 board helper. Companion project: [ESP32-PC-Control-System](https://github.com/lnminh1411/ESP32-PC-Control-System).
 
 ## Features
 
 - **Fans**: `graph` (hysteresis and response delays), `auto` (deadband) and `flat` curves; virtual `mix` sensors (`max`, `min`, `avg`); step limits (`stepUp`, `stepDown`); a stale sensor drives its fan to 100 %, service stop or crash hands fans back to BIOS control; AMD OD8 GPU fan curves written directly to firmware via `atiadlxx.dll`; GPU Zero RPM parking (`zero` and `release` modes).
 - **RGB**: Gigabyte IT5711 USB HID (3 ARGB headers, single-color zones) and ENE DRAM SMBus (2x DDR5); `off`, `static`, `breathing`, `rainbow`, and sensor-driven `gradient` modes with smoothing; dedicated background device flush threads with FPS caps; global master brightness.
-- **Monitors**: DDC/CI brightness (VCP 0x10), power (VCP 0xD6 `ddc-power` or VCP 0x60 input switch `ddc-input`), and active input selection (VCP 0x60); Windows display sleep (`SC_MONITORPOWER`) and mouse-nudge wake; user-session `display-agent` helper process to bypass Session 0 isolation.
+- **Monitors** (replaces Twinkle Tray): DDC/CI brightness (VCP 0x10), power (VCP 0xD6 `ddc-power` or VCP 0x60 input switch `ddc-input`), and active input selection (VCP 0x60); Windows display sleep (`SC_MONITORPOWER`) and mouse-nudge wake; user-session `display-agent` helper process to bypass Session 0 isolation.
 - **Process Lasso**: Direct `prolasso.ini` parser and editor; live CPU affinity pinning (`aff`); profile saving and loading (`lasso`); Windows efficiency mode (EcoQoS) enforcement and background sweep (`eco`).
 - **Activity and power**: Per-process CPU usage tracking (`proc top`) via `NtQuerySystemInformation`; Windows wake locks inspection via `powercfg /requests`; Windows power plan switching including "PcHwCtl Night" (30 % max / 5 % min processor state, Balanced's core parking, display off after 5 min); SYSTEM power transitions (`sleep`, `hibernate`, `restart`, `shutdown`, `lock`); Event Log shutdown, wake, and update reboot tracking.
 - **Sensor feed**: Central LibreHardwareMonitor reader with split-loop polling (500 ms fast, 1000 ms background CPU/memory); JSON queries and snapshot text streaming over named pipe (`get sensors`, `subscribe sensors`).
