@@ -35,6 +35,7 @@ public sealed class CommandProcessor
     private readonly Func<PowerConfig> _powerConfig;
     private readonly IPowerActions? _actions;
     private readonly IPowerStatus? _status;
+    private readonly IVpnStatus? _vpn;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="CommandProcessor"/> class.
@@ -44,8 +45,9 @@ public sealed class CommandProcessor
     public CommandProcessor(IFanControl fans, IRgbControl rgb, Func<IpcConfig> ipcConfig, IClock clock, PersistedSettings? persisted = null, IDisplayControl? displays = null, ILassoControl? lasso = null, SensorFeedHub? sensors = null,
         IProcessActivity? processes = null, IPowerRequests? power = null,
         IPowerPlans? plans = null, Func<PowerConfig>? powerConfig = null, IPowerActions? actions = null,
-        IPowerStatus? status = null)
+        IPowerStatus? status = null, IVpnStatus? vpn = null)
     {
+        _vpn = vpn;
         _actions = actions;
         _status = status;
         _displays = displays;
@@ -97,6 +99,7 @@ public sealed class CommandProcessor
                 "lasso" => HandleLasso(tokens),
                 "eco" => HandleEco(tokens),
                 "proc" => HandleProc(tokens),
+                "vpn" => tokens.Length != 1 ? Error("Usage: vpn") : _vpn == null ? Error("VPN check is off (config vpn.enabled).") : Ok(VpnDto(_vpn.Status)),
                 "power" => HandlePower(tokens),
                 "release" => HandleGenericRelease(tokens),
                 _ => Error($"Unknown command '{tokens[0]}'.")
@@ -475,6 +478,15 @@ public sealed class CommandProcessor
             return Error(ex.Message);
         }
     }
+
+    private static object VpnDto(VpnStatus s) => new
+    {
+        kind = s.Check.Kind,
+        by = s.Check.By,
+        exit = s.Exit == null ? null : new { ip = s.Exit.Ip, loc = s.Exit.Loc, warp = s.Exit.Warp },
+        checkedAt = s.CheckedUtc == DateTime.MinValue ? (DateTime?)null : s.CheckedUtc,
+        tracedAt = s.TracedUtc
+    };
 
     private static object StatusDto(PowerStatus s) => new
     {

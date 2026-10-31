@@ -44,6 +44,7 @@ Names are case-insensitive. `<fan>` = a fan key from config or `all`. `<group>` 
 | `power caps` | `{sleep, hibernate}`: whether the PC can sleep, and whether hibernation is on (hiberfil.sys present) |
 | `power do <sleep\|hibernate\|restart\|shutdown\|lock> [delayMs]` | accepted: `{action, accepted:true}`, the action runs as SYSTEM after `delayMs` (0-10000). Declined: `ok:false` and the reason in `error` (see [Power actions and events](#power-actions-and-events)) |
 | `power status` | `{going, lastDown, wake, update, lastDo}`: why the PC is going down now, how it last went down, the last wake, Windows Update state, and the last `power do` |
+| `vpn` | `{kind, by, exit:{ip, loc, warp}, checkedAt, tracedAt}`, see [VPN check](#vpn-check) |
 | `proc top [n]` | the n (default 5, max 50) busiest exes over the last second: `[{exe, cores, instances}]`, `cores` 1.0 = one core busy, summed over instances. Includes system and kept processes |
 | `get sensors` | latest sensor feed snapshot as JSON: `{seq, ts, values: {cpu_temp: 41.8, gpu1_fan: null, ...}}` |
 | `subscribe sensors` | after the ack line, the server pushes every sensor feed snapshot as text, see [Sensor feed](#sensor-feed) |
@@ -189,6 +190,22 @@ With no delay, restart, shutdown and lock run before the reply, so a Win32 error
 | `power_do`, `power_do_at` | the last `power do`: `<action> accepted`, `<action> declined <why>`, `<action> failed <why>` |
 
 Sources: System log 1074 (who/why/code/comment/user), Kernel-Power 42 (entering sleep) and 109 (kernel shutdown, e.g. the power button, used when no 1074 came first), Kernel-Power 41 / EventLog 6008 at boot (unclean: bugcheck, power button, sleep in progress), Power-Troubleshooter 1 (wake source). `update_pending` reads the RebootRequired and RebootPending registry keys every 30 s; `update_running` looks for TiWorker, poqexec or SetupHost with no explorer every 5 s.
+
+## VPN check
+
+Is the PC's internet traffic going through a tunnel, and where does it come out? PcHwCtl asks Windows which adapter carries traffic to 8.8.8.8 (`GetBestInterface`, so VPNs that add `0.0.0.0/1` + `128.0.0.0/1` routes count) and classifies it:
+
+- `warp`: Cloudflare WARP. It tunnels through Cloudflare but does not hide where the PC is; websites still see roughly the right country. WARP's DNS-only mode (1.1.1.1) has no tunnel, so it reads `none`.
+- `vpn`: a tunnel driver or VPN client (WireGuard, Wintun, TAP/OpenVPN, SoftEther, NordLynx, Proton, Mullvad, Tailscale exit nodes, any adapter with VPN in its name, ...) or a Windows PPP VPN.
+- `none`: anything else, or no route.
+
+**When:** only on Windows' adapter events (address or availability changes), never on a timer. A VPN connecting fires several events in a row, so the check waits until they have been quiet for `vpn.settleS` (default 5 s) and runs once. It also runs once at start.
+
+**Exit:** when the check's result changes (or the last trace failed), PcHwCtl fetches `https://www.cloudflare.com/cdn-cgi/trace` (5 s timeout; by name, because VPN clients such as SoftEther route 1.1.1.1 outside the tunnel): the public IP, its country, and Cloudflare's own `warp=on|plus|off`. This is PcHwCtl's only internet request; `vpn.trace: false` turns it off. `exit_loc` is how to tell WARP from a real VPN: with WARP it stays your own country.
+
+Feed and state file keys (`hw.` in the state file): `vpn` (none, warp, vpn), `vpn_by` (adapter description), `exit_ip`, `exit_loc` (country code), `exit_warp` (on, plus, off). `-` when unknown.
+
+Config: `"vpn": { "enabled": true, "trace": true, "settleS": 5 }` (settleS 1-60). Applies after a service restart.
 
 ## Zero RPM (GPU fans)
 

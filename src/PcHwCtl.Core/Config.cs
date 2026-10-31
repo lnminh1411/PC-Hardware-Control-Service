@@ -22,6 +22,7 @@ public sealed class Config
     public LassoConfig Lasso { get; set; } = new();
     public FeedConfig Feed { get; set; } = new();
     public PowerConfig Power { get; set; } = new();
+    public VpnConfig Vpn { get; set; } = new();
 }
 
 public sealed class SensorConfig
@@ -347,6 +348,11 @@ public static class ConfigLoader
         }
 
         // 6. Sensor feed
+        if (config.Vpn.SettleS is < 1 or > 60)
+        {
+            errors.Add($"Vpn settleS {config.Vpn.SettleS} must be 1-60.");
+        }
+
         if (config.Feed.IntervalMs is < 100 or > 10_000)
         {
             errors.Add($"Feed intervalMs {config.Feed.IntervalMs} must be 100-10000.");

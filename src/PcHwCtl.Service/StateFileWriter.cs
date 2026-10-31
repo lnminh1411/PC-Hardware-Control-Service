@@ -39,6 +39,9 @@ public sealed class StateFileWriter
     /// <summary>Going / last down / wake / updates / last power do as hw.going, hw.last_down, ... ; null = none.</summary>
     public IPowerStatus? Events { get; set; }
 
+    /// <summary>VPN check and exit as hw.vpn, hw.vpn_by, hw.exit_ip, hw.exit_loc, hw.exit_warp; null = off.</summary>
+    public IVpnStatus? Vpn { get; set; }
+
     public void Write(IFanControl fans, IRgbControl? rgb, float? mixTemp)
     {
         var displays = Displays;
@@ -79,6 +82,7 @@ public sealed class StateFileWriter
             var values = new List<KeyValuePair<string, double?>>();
             var texts = new List<KeyValuePair<string, string>>();
             PowerStatusKeys.AddTo(status, values, texts);
+            if (Vpn != null) VpnClassifier.AddTo(Vpn.Status, values, texts);
             foreach (var (k, v) in values) Add(sb, $"hw.{k}", (v ?? 0).ToString("0", CultureInfo.InvariantCulture));
             foreach (var (k, v) in texts) Add(sb, $"hw.{k}", v);
         }

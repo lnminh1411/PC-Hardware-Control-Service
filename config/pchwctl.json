@@ -280,6 +280,11 @@
     "requestsPollS": 5,
     "every": { "Cpu": 1000, "Memory": 1000 }
   },
+  "vpn": {
+    "enabled": true,
+    "trace": true,
+    "settleS": 5
+  },
   "power": {
     "nightPlan": "PcHwCtl Night",
     "dayPlan": "High performance"
