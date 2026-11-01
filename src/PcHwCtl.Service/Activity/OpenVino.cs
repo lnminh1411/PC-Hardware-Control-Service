@@ -4,7 +4,7 @@ using PcHwCtl.Core.Activity;
 namespace PcHwCtl.Service.Activity;
 
 /// <summary>
-/// YOLO11n on OpenVINO through its C API (openvino_c.dll from the OpenVINO.runtime.win package), just the calls one
+/// YOLO (YOLO26x by default) on OpenVINO through its C API (openvino_c.dll from the OpenVINO.runtime.win package), just the calls one
 /// static-shape model needs. Compiled once and kept; the input tensor is wiped after every inference.
 /// </summary>
 public sealed unsafe class YoloModel : IDisposable

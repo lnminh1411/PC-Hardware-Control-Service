@@ -11,8 +11,8 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- YOLO11n (Ultralytics, AGPL-3.0) as OpenVINO IR, shipped next to pchwctl.exe -->
-    <None Include="..\..\models\yolo11n-fp16-ov\*" Link="models\yolo11n-fp16-ov\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <!-- YOLO26x (Ultralytics, AGPL-3.0) as OpenVINO IR fp16, shipped next to pchwctl.exe; the .bin is in Git LFS -->
+    <None Include="..\..\models\yolo26x-fp16-ov\*" Link="models\yolo26x-fp16-ov\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>
@@ -29,7 +29,7 @@
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.*" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.*" />
-    <!-- presence: camera frames (DirectShow, like npu-bench's cv2) and YOLO11n on the NPU through OpenVINO's C API -->
+    <!-- presence: camera frames (DirectShow, like npu-bench's cv2) and YOLO26x on the NPU through OpenVINO's C API -->
     <PackageReference Include="OpenCvSharp4" Version="4.13.0.20260627" />
     <PackageReference Include="OpenCvSharp4.runtime.win" Version="4.13.0.20260627" />
     <PackageReference Include="OpenVINO.runtime.win" Version="2026.4.1" />

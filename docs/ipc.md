@@ -215,22 +215,22 @@ Config: `"vpn": { "enabled": true, "trace": true, "settleS": 5 }` (settleS 1-60)
 
 `presence` answers "is someone at the PC right now?" with one check, run when the command arrives. There is no timer: the client decides how often to ask (the ESP32 helper asks every minute) and what to do with the answer (intrusion alert).
 
-**How:** the display agent (the user's session; session 0 has no camera access) opens camera `presence.camera` through DirectShow at 640x480, drops `settleFrames` (default 26, about 1 s) while exposure settles, keeps one frame and closes the camera, so the LED is on for about 1-2 s. YOLO11n (COCO, shipped in `models\yolo11n-fp16-ov`) runs on `presence.device` (default NPU through OpenVINO; CPU when the NPU fails). The answer is the best person score.
+**How:** the display agent (the user's session; session 0 has no camera access) opens camera `presence.camera` through DirectShow at 640x480, drops `settleFrames` (default 26, about 1 s) while exposure settles, keeps one frame and closes the camera, so the LED is on for about 1-2 s. YOLO26x (COCO, shipped in `models\yolo26x-fp16-ov`, about 65 ms on the NPU) runs on `presence.device` (default NPU through OpenVINO; CPU when the NPU fails). The answer is the best person score.
 
 **Privacy:** the frame lives only in the agent's memory. It is never written to disk and never sent: the camera frame, its scaled copy and the model's input tensor are zeroed right after inference, before the reply. Only the fields below leave the agent.
 
 | Field | Meaning |
 |---|---|
 | `present` | `yes` (person score >= `minConf`), `no`, or `unknown` |
-| `conf` | best person score, 0-1. npu-bench on a Logi C270: away 0.000-0.001, seated in daylight 0.89-0.91, seated in a dim room down to 0.13 |
+| `conf` | best person score, 0-1. npu-bench, YOLO26x on a Logi C270 in a near-black room (luma 1-2): away at most 0.001, seated 0.55-0.93 |
 | `luma` | mean frame brightness 0-255 |
-| `why` | `-`, or why `present` is `unknown`: `dark` (nobody seen and luma < `darkLuma`: the camera can't see), `camera` (in use, unplugged, or Windows camera access for desktop apps off), `model` (OpenVINO failed), `agent` (no display agent, e.g. nobody logged on), `off` |
+| `why` | `-`, or why `present` is `unknown`: `dark` (nobody seen and luma < `darkLuma`, default 0.5: a covered lens or black frame), `camera` (in use, unplugged, or Windows camera access for desktop apps off), `model` (OpenVINO failed), `agent` (no display agent, e.g. nobody logged on), `off` |
 | `device` | where the model ran: `NPU`, `CPU`, `-` |
 | `ms` | how long the check took |
 
-The first check after the agent starts also compiles the model (cached in `%LOCALAPPDATA%\PcHwCtl\ovcache`, a few seconds the first time).
+The first check after the agent starts also compiles the model (cached in `%LOCALAPPDATA%\PcHwCtl\ovcache`, about 5 s the first time).
 
-Config: `"presence": { "enabled": true, "device": "NPU", "model": "", "camera": 0, "minConf": 0.1, "darkLuma": 10, "settleFrames": 26 }` (`model` empty = the shipped one). The agent rereads it when the file changes.
+Config: `"presence": { "enabled": true, "device": "NPU", "model": "", "camera": 0, "minConf": 0.1, "darkLuma": 0.5, "settleFrames": 26 }` (`model` empty = the shipped one). The agent rereads it when the file changes.
 
 ## Screenshot
 

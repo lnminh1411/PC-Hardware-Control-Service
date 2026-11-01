@@ -290,7 +290,7 @@
     "device": "NPU",
     "camera": 0,
     "minConf": 0.1,
-    "darkLuma": 10,
+    "darkLuma": 0.5,
     "settleFrames": 26
   },
   "screenshot": {

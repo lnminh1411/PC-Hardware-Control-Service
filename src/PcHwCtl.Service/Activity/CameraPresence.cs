@@ -6,7 +6,7 @@ namespace PcHwCtl.Service.Activity;
 
 /// <summary>
 /// One presence check: open the webcam (DirectShow, as npu-bench's cv2 did), drop SettleFrames while exposure
-/// settles, keep one frame, close the camera, run YOLO11n, then zero the frame, its scaled copy and the model input.
+/// settles, keep one frame, close the camera, run YOLO26x, then zero the frame, its scaled copy and the model input.
 /// Frames live only in this process's memory; nothing is written to disk or returned but the verdict.
 /// Runs in the user-session agent (session 0 has no camera access), or in the console service.
 /// </summary>
@@ -26,7 +26,7 @@ public sealed unsafe class CameraPresence : IPresence, IDisposable
         _cacheDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PcHwCtl", "ovcache");
     }
 
-    public static string DefaultModel => Path.Combine(AppContext.BaseDirectory, "models", "yolo11n-fp16-ov", "yolo11n.xml");
+    public static string DefaultModel => Path.Combine(AppContext.BaseDirectory, "models", "yolo26x-fp16-ov", "yolo26x.xml");
 
     public PresenceResult Check()
     {
@@ -113,7 +113,7 @@ public sealed unsafe class CameraPresence : IPresence, IDisposable
         var sw = Stopwatch.StartNew();
         _model = YoloModel.Load(path, cfg.Device, _cacheDir, _log);
         _modelKey = (path, cfg.Device);
-        _log($"Presence: YOLO11n ready on {_model.Device} in {sw.ElapsedMilliseconds} ms.");
+        _log($"Presence: YOLO ready on {_model.Device} in {sw.ElapsedMilliseconds} ms.");
         return _model;
     }
 

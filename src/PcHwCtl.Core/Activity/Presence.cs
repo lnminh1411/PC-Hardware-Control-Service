@@ -3,7 +3,7 @@ namespace PcHwCtl.Core.Activity;
 /// <summary>
 /// Presence: is someone at the PC right now? One check per `presence` command, never on a timer: the ESP32 helper
 /// decides when to ask and what an answer means (intrusion alert and so on). The user-session agent grabs one webcam
-/// frame, runs YOLO11n person detection on it (NPU through OpenVINO, CPU fallback) and wipes every copy of the frame
+/// frame, runs YOLO26x person detection on it (NPU through OpenVINO, CPU fallback) and wipes every copy of the frame
 /// before it answers. Only the verdict leaves the agent; no image is stored or sent.
 /// </summary>
 public sealed class PresenceConfig
@@ -13,17 +13,18 @@ public sealed class PresenceConfig
     /// <summary>OpenVINO device, tried first; CPU when it fails.</summary>
     public string Device { get; set; } = "NPU";
 
-    /// <summary>OpenVINO IR .xml (YOLO11n, [1, 3, 640, 640] in, [1, 84, 8400] out); empty = the one shipped in models\.</summary>
+    /// <summary>OpenVINO IR .xml (YOLO11/YOLO26, [1, 3, 640, 640] in, [1, 84, 8400] out); empty = the one shipped in models\.</summary>
     public string Model { get; set; } = "";
 
     /// <summary>Camera index for DirectShow, 0 = the first one.</summary>
     public int Camera { get; set; }
 
-    /// <summary>Person confidence for "yes". npu-bench: away 0.000-0.001, seated in light 0.89-0.91, seated in a dim room down to 0.13.</summary>
+    /// <summary>Person confidence for "yes". npu-bench, YOLO26x in a near-black room: away at most 0.001, seated 0.55-0.93.</summary>
     public double MinConf { get; set; } = 0.1;
 
-    /// <summary>Mean frame brightness (0-255) below which "nobody seen" becomes "unknown": the camera can't see in the dark.</summary>
-    public double DarkLuma { get; set; } = 10;
+    /// <summary>Mean frame brightness (0-255) below which "nobody seen" becomes "unknown": the camera can't see. YOLO26x
+    /// still finds a seated person at luma 1.6 on a C270, so only a covered lens or a black frame counts.</summary>
+    public double DarkLuma { get; set; } = 0.5;
 
     /// <summary>Frames read and dropped while the camera's exposure settles (npu-bench used 26, about 1 s).</summary>
     public int SettleFrames { get; set; } = 26;
@@ -56,7 +57,7 @@ public static class PresenceLogic
         return ("no", "-");
     }
 
-    /// <summary>Best person score in YOLO11n's [1, 84, 8400] output: row 4, one value per anchor.</summary>
+    /// <summary>Best person score in the [1, 84, 8400] output (YOLO11 and YOLO26 export alike): row 4, one value per anchor.</summary>
     public static double MaxPersonConf(ReadOnlySpan<float> output)
     {
         if (output.Length != Rows * Anchors) throw new ArgumentException($"YOLO output has {output.Length} values, expected {Rows * Anchors}.");

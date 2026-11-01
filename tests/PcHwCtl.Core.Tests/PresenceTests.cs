@@ -39,7 +39,8 @@ public class PresenceTests
         Assert.Equal(("yes", "-"), PresenceLogic.Decide(0.9, 120, cfg));
         Assert.Equal(("yes", "-"), PresenceLogic.Decide(0.13, 3, cfg));      // seen even in the dark
         Assert.Equal(("no", "-"), PresenceLogic.Decide(0.001, 80, cfg));
-        Assert.Equal(("unknown", "dark"), PresenceLogic.Decide(0.01, 0.6, cfg));   // pitch black: can't tell
+        Assert.Equal(("no", "-"), PresenceLogic.Decide(0.001, 0.9, cfg));    // near-black room: YOLO26x still sees
+        Assert.Equal(("unknown", "dark"), PresenceLogic.Decide(0.01, 0.3, cfg));   // black frame: can't tell
     }
 
     [Fact]
