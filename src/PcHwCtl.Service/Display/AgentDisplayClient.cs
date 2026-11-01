@@ -88,8 +88,11 @@ public sealed class AgentDisplayClient : IDisplayControl, IDisposable
         }
     }
 
+    /// <summary>A raw agent command (presence, shot); the reply line, null when the agent is unreachable.</summary>
+    public string? Request(string line, int replyTimeoutMs) => Send(line, replyTimeoutMs);
+
     /// <summary>One line out, one line back; null (and Status set) when the agent is unreachable.</summary>
-    private string? Send(string line)
+    private string? Send(string line, int replyTimeoutMs = ReplyTimeoutMs)
     {
         lock (_requestGate)
         {
@@ -101,7 +104,7 @@ public sealed class AgentDisplayClient : IDisplayControl, IDisposable
                 using var reader = new StreamReader(pipe, new UTF8Encoding(false), leaveOpen: true);
                 writer.WriteLine(line);
                 var read = reader.ReadLineAsync();
-                if (!read.Wait(ReplyTimeoutMs)) throw new TimeoutException($"no reply within {ReplyTimeoutMs / 1000} s");
+                if (!read.Wait(replyTimeoutMs)) throw new TimeoutException($"no reply within {replyTimeoutMs / 1000} s");
                 string? reply = read.Result ?? throw new IOException("agent closed the pipe");
                 if (_status != null) _log("Display agent reachable.");
                 _status = null;

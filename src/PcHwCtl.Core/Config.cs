@@ -23,6 +23,8 @@ public sealed class Config
     public FeedConfig Feed { get; set; } = new();
     public PowerConfig Power { get; set; } = new();
     public VpnConfig Vpn { get; set; } = new();
+    public PresenceConfig Presence { get; set; } = new();
+    public ScreenshotConfig Screenshot { get; set; } = new();
 }
 
 public sealed class SensorConfig
@@ -352,6 +354,15 @@ public static class ConfigLoader
         {
             errors.Add($"Vpn settleS {config.Vpn.SettleS} must be 1-60.");
         }
+
+        var presence = config.Presence;
+        if (presence.MinConf is <= 0 or > 1) errors.Add($"Presence minConf {presence.MinConf} must be above 0 and at most 1.");
+        if (presence.DarkLuma is < 0 or > 255) errors.Add($"Presence darkLuma {presence.DarkLuma} must be 0-255.");
+        if (presence.SettleFrames is < 0 or > 150) errors.Add($"Presence settleFrames {presence.SettleFrames} must be 0-150.");
+        if (presence.Camera is < 0 or > 9) errors.Add($"Presence camera {presence.Camera} must be 0-9.");
+        if (string.IsNullOrWhiteSpace(presence.Device)) errors.Add("Presence device is empty.");
+        if (config.Screenshot.DeleteMin is < 0 or > 10_080) errors.Add($"Screenshot deleteMin {config.Screenshot.DeleteMin} must be 0-10080 (a week).");
+        if (config.Screenshot.BorderS is < 0 or > 60) errors.Add($"Screenshot borderS {config.Screenshot.BorderS} must be 0-60.");
 
         if (config.Feed.IntervalMs is < 100 or > 10_000)
         {

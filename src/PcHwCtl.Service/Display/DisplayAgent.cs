@@ -4,7 +4,9 @@ using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
 using PcHwCtl.Core;
+using PcHwCtl.Core.Activity;
 using PcHwCtl.Core.Display;
+using PcHwCtl.Service.Activity;
 
 namespace PcHwCtl.Service.Display;
 
@@ -26,13 +28,17 @@ public static class DisplayAgent
             try { File.AppendAllText(logPath, $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {message}{Environment.NewLine}"); } catch (IOException) { }
         }
 
-        var config = new ReloadingDisplaysConfig(configPath, Log);
-        var controller = new DisplayController(new DdcDisplayBus(), config.Get, SystemClock.Instance);
+        var config = new ReloadingConfig(configPath, Log);
+        var controller = new DisplayController(new DdcDisplayBus(), () => config.Get().Displays, SystemClock.Instance);
         using var cts = new CancellationTokenSource();
         Log($"Display agent started (session {Process.GetCurrentProcess().SessionId}, parent {parentPid?.ToString() ?? "none"}).");
 
-        var poller = new DisplayPoller(controller, () => config.Get().PollS, Log);
+        var poller = new DisplayPoller(controller, () => config.Get().Displays.PollS, Log);
         poller.Start(cts.Token);
+        using var presence = new CameraPresence(() => config.Get().Presence, Log);
+        using var shooter = new ScreenShooter(() => config.Get().Screenshot, Log);
+        shooter.Start();
+        var agent = new AgentCommands(controller, presence, shooter);
 
         if (parentPid is int pid)
         {
@@ -52,7 +58,7 @@ public static class DisplayAgent
 
         try
         {
-            await ServeAsync(controller, Log, cts.Token);
+            await ServeAsync(agent, Log, cts.Token);
         }
         catch (IOException ex)
         {
@@ -78,7 +84,7 @@ public static class DisplayAgent
         }
     }
 
-    private static async Task ServeAsync(DisplayController controller, Action<string> log, CancellationToken ct)
+    private static async Task ServeAsync(AgentCommands agent, Action<string> log, CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
@@ -103,13 +109,13 @@ public static class DisplayAgent
                     string reply;
                     try
                     {
-                        reply = DisplayCommands.Execute(controller, tokens);
+                        reply = agent.Execute(tokens);
                     }
                     catch (Exception ex)
                     {
                         reply = $"{{\"ok\":false,\"error\":{System.Text.Json.JsonSerializer.Serialize(ex.Message)}}}";
                     }
-                    if (tokens.Length > 0 && !tokens[0].Equals("list", StringComparison.OrdinalIgnoreCase)) log($"{line} -> {reply}");
+                    if (tokens.Length > 0 && !tokens[0].Equals("list", StringComparison.OrdinalIgnoreCase)) log($"{AgentCommands.ForLog(tokens)} -> {reply}");
                     await writer.WriteLineAsync(reply);
                 }
             }
@@ -131,13 +137,19 @@ public static class DisplayAgent
         return security;
     }
 
-    /// <summary>The displays section of the service config, reread when the file changes.</summary>
-    private sealed class ReloadingDisplaysConfig(string path, Action<string> log)
+    /// <summary>The service config (displays, presence, screenshot sections), reread when the file changes.</summary>
+    private sealed class ReloadingConfig(string path, Action<string> log)
     {
-        private DisplaysConfig _current = new();
+        private readonly object _lock = new();
+        private Config _current = new();
         private DateTime _mtime;
 
-        public DisplaysConfig Get()
+        public Config Get()
+        {
+            lock (_lock) return Reload();
+        }
+
+        private Config Reload()
         {
             try
             {
@@ -145,8 +157,8 @@ public static class DisplayAgent
                 if (mtime != _mtime)
                 {
                     _mtime = mtime;
-                    _current = ConfigLoader.Load(path).Displays;
-                    log($"Loaded displays config from {path}: {_current.Models.Count} model rule(s).");
+                    _current = ConfigLoader.Load(path);
+                    log($"Loaded config from {path}: {_current.Displays.Models.Count} display model rule(s).");
                 }
             }
             catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ConfigException)

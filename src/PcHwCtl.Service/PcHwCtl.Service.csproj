@@ -4,7 +4,22 @@
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <AssemblyName>pchwctl</AssemblyName>
+    <!-- the user-session agent draws the screenshot border with WinForms -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <!-- presence reads camera frames and fills the model input in place, without managed copies to wipe -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- YOLO11n (Ultralytics, AGPL-3.0) as OpenVINO IR, shipped next to pchwctl.exe -->
+    <None Include="..\..\models\yolo11n-fp16-ov\*" Link="models\yolo11n-fp16-ov\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- WinForms is only for the agent's border overlay; its implicit usings clash with our names (PowerStatus) -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\PcHwCtl.Core\PcHwCtl.Core.csproj" />
@@ -14,6 +29,10 @@
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.*" />
     <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.*" />
+    <!-- presence: camera frames (DirectShow, like npu-bench's cv2) and YOLO11n on the NPU through OpenVINO's C API -->
+    <PackageReference Include="OpenCvSharp4" Version="4.13.0.20260627" />
+    <PackageReference Include="OpenCvSharp4.runtime.win" Version="4.13.0.20260627" />
+    <PackageReference Include="OpenVINO.runtime.win" Version="2026.4.1" />
   </ItemGroup>
 
 </Project>

@@ -285,6 +285,19 @@
     "trace": true,
     "settleS": 5
   },
+  "presence": {
+    "enabled": true,
+    "device": "NPU",
+    "camera": 0,
+    "minConf": 0.1,
+    "darkLuma": 10,
+    "settleFrames": 26
+  },
+  "screenshot": {
+    "enabled": true,
+    "deleteMin": 5,
+    "borderS": 5
+  },
   "power": {
     "nightPlan": "PcHwCtl Night",
     "dayPlan": "High performance"

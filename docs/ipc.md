@@ -45,6 +45,8 @@ Names are case-insensitive. `<fan>` = a fan key from config or `all`. `<group>` 
 | `power do <sleep\|hibernate\|restart\|shutdown\|lock> [delayMs]` | accepted: `{action, accepted:true}`, the action runs as SYSTEM after `delayMs` (0-10000). Declined: `ok:false` and the reason in `error` (see [Power actions and events](#power-actions-and-events)) |
 | `power status` | `{going, lastDown, wake, update, lastDo}`: why the PC is going down now, how it last went down, the last wake, Windows Update state, and the last `power do` |
 | `vpn` | `{kind, by, stack, exit:{ip, loc, warp}, checkedAt, tracedAt}`, see [VPN check](#vpn-check) |
+| `presence` | one webcam check now (1-3 s): `{present, conf, luma, why, device, ms}`, see [Presence](#presence) |
+| `screenshot <nonce> <webhook>` | `{nonce, accepted, why}`: captures every monitor, then a red border and a Discord post deleted later, see [Screenshot](#screenshot) |
 | `proc top [n]` | the n (default 5, max 50) busiest exes over the last second: `[{exe, cores, instances}]`, `cores` 1.0 = one core busy, summed over instances. Includes system and kept processes |
 | `get sensors` | latest sensor feed snapshot as JSON: `{seq, ts, values: {cpu_temp: 41.8, gpu1_fan: null, ...}}` |
 | `subscribe sensors` | after the ack line, the server pushes every sensor feed snapshot as text, see [Sensor feed](#sensor-feed) |
@@ -208,6 +210,47 @@ Is the PC's internet traffic going through a tunnel, and where does it come out?
 Feed and state file keys (`hw.` in the state file): `vpn` (none, warp, vpn), `vpn_by` (adapter description), `vpn_stack` (e.g. `vpn`, `warp+vpn`, `vpn+warp`, `none`), `exit_ip`, `exit_loc` (country code), `exit_warp` (on, plus, off). `-` when unknown.
 
 Config: `"vpn": { "enabled": true, "trace": true, "settleS": 5 }` (settleS 1-60). Applies after a service restart.
+
+## Presence
+
+`presence` answers "is someone at the PC right now?" with one check, run when the command arrives. There is no timer: the client decides how often to ask (the ESP32 helper asks every minute) and what to do with the answer (intrusion alert).
+
+**How:** the display agent (the user's session; session 0 has no camera access) opens camera `presence.camera` through DirectShow at 640x480, drops `settleFrames` (default 26, about 1 s) while exposure settles, keeps one frame and closes the camera, so the LED is on for about 1-2 s. YOLO11n (COCO, shipped in `models\yolo11n-fp16-ov`) runs on `presence.device` (default NPU through OpenVINO; CPU when the NPU fails). The answer is the best person score.
+
+**Privacy:** the frame lives only in the agent's memory. It is never written to disk and never sent: the camera frame, its scaled copy and the model's input tensor are zeroed right after inference, before the reply. Only the fields below leave the agent.
+
+| Field | Meaning |
+|---|---|
+| `present` | `yes` (person score >= `minConf`), `no`, or `unknown` |
+| `conf` | best person score, 0-1. npu-bench on a Logi C270: away 0.000-0.001, seated in daylight 0.89-0.91, seated in a dim room down to 0.13 |
+| `luma` | mean frame brightness 0-255 |
+| `why` | `-`, or why `present` is `unknown`: `dark` (nobody seen and luma < `darkLuma`: the camera can't see), `camera` (in use, unplugged, or Windows camera access for desktop apps off), `model` (OpenVINO failed), `agent` (no display agent, e.g. nobody logged on), `off` |
+| `device` | where the model ran: `NPU`, `CPU`, `-` |
+| `ms` | how long the check took |
+
+The first check after the agent starts also compiles the model (cached in `%LOCALAPPDATA%\PcHwCtl\ovcache`, a few seconds the first time).
+
+Config: `"presence": { "enabled": true, "device": "NPU", "model": "", "camera": 0, "minConf": 0.1, "darkLuma": 10, "settleFrames": 26 }` (`model` empty = the shipped one). The agent rereads it when the file changes.
+
+## Screenshot
+
+`screenshot <nonce> <webhook>` (from the ESP32 helper's `S` command) runs in the display agent:
+
+1. Captures every monitor into one PNG, in memory only.
+2. Shows a red border and "Screenshot Captured" on every monitor for `borderS` seconds. The border comes after the capture, so it is never in the image, and nobody is captured without seeing it.
+3. Posts the PNG to the Discord webhook (`?wait=true`, for the message id), then zeroes it.
+4. Deletes the post `deleteMin` minutes later. Due deletes live in `%LOCALAPPDATA%\PcHwCtl\shot-deletes.txt`, so a restart doesn't lose them.
+
+The reply comes after the capture; the border and the upload run on. `accepted:false` and `why`:
+- `busy`: the last screenshot is still uploading.
+- `webhook`: not an `https://discord.com/api/webhooks/...` URL. Only Discord is accepted, so a pipe client can't send the desktop anywhere else.
+- `capture`: e.g. the desktop is locked.
+- `agent`: no display agent.
+- `off`: screenshots are off.
+
+The webhook URL is kept out of the logs.
+
+Config: `"screenshot": { "enabled": true, "deleteMin": 5, "borderS": 5 }` (deleteMin 0 = keep the post).
 
 ## Zero RPM (GPU fans)
 

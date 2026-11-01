@@ -41,6 +41,15 @@ public static class Program
             return await PipeClient.RunAsync("PcHwCtl", string.Join(' ', args.Skip(1)), Console.Out, ipcCts.Token);
         }
 
+        // pchwctl presence-test: two camera checks in this console (the config's presence section), for diagnosing the agent's.
+        if (args.Length > 0 && string.Equals(args[0], "presence-test", StringComparison.OrdinalIgnoreCase))
+        {
+            var cfg = ConfigLoader.Load(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "PcHwCtl", "pchwctl.json")).Presence;
+            using var check = new CameraPresence(() => cfg, Console.WriteLine);
+            for (int i = 0; i < 2; i++) Console.WriteLine(check.Check());   // the second shows the warm time
+            return 0;
+        }
+
         // pchwctl display-agent [--config <path>] [--parent <pid>]: user-session monitor control (no admin needed).
         if (args.Length > 0 && string.Equals(args[0], "display-agent", StringComparison.OrdinalIgnoreCase))
         {
@@ -209,7 +218,12 @@ public static class Program
         DisplayAgentLauncher? displayLauncher = null;
         // Not disposed: ProcessExit cancels it after Main has returned.
         var displayCts = new CancellationTokenSource();
-        if (config.Displays.Enabled && !isDryRun)
+        // Presence (webcam) and screenshots need the user's session too, so they ride on the same agent.
+        IPresence? presence = null;
+        IScreenshot? screenshot = null;
+        ScreenShooter? localShooter = null;
+        CameraPresence? localPresence = null;
+        if ((config.Displays.Enabled || config.Presence.Enabled || config.Screenshot.Enabled) && !isDryRun)
         {
             if (System.Diagnostics.Process.GetCurrentProcess().SessionId == 0)
             {
@@ -217,13 +231,25 @@ public static class Program
                 displayLauncher = new DisplayAgentLauncher(Environment.ProcessPath!, effectiveConfigPath, displayClient, msg => logger.Log(msg));
                 displayClient.Start();
                 displayLauncher.Start();
-                displays = displayClient;
+                if (config.Displays.Enabled) displays = displayClient;
+                var features = new AgentFeatures(displayClient);
+                if (config.Presence.Enabled) presence = features;
+                if (config.Screenshot.Enabled) screenshot = features;
             }
             else
             {
-                var controller = new DisplayController(new DdcDisplayBus(), () => config.Displays, SystemClock.Instance);
-                new DisplayPoller(controller, () => config.Displays.PollS, msg => logger.Log(msg)).Start(displayCts.Token);
-                displays = controller;
+                if (config.Displays.Enabled)
+                {
+                    var controller = new DisplayController(new DdcDisplayBus(), () => config.Displays, SystemClock.Instance);
+                    new DisplayPoller(controller, () => config.Displays.PollS, msg => logger.Log(msg)).Start(displayCts.Token);
+                    displays = controller;
+                }
+                if (config.Presence.Enabled) presence = localPresence = new CameraPresence(() => config.Presence, msg => logger.Log(msg));
+                if (config.Screenshot.Enabled)
+                {
+                    screenshot = localShooter = new ScreenShooter(() => config.Screenshot, msg => logger.Log(msg));
+                    localShooter.Start();
+                }
             }
         }
 
@@ -266,7 +292,7 @@ public static class Program
         if (config.Ipc.Enabled)
         {
             var processor = new CommandProcessor(engine, rgb, () => config.Ipc, SystemClock.Instance, persisted, displays, lasso, sensorHub, processCpu, powerRequests,
-                powerPlans, () => config.Power, new PowerActions(powerWatcher), powerWatcher, vpnWatcher);
+                powerPlans, () => config.Power, new PowerActions(powerWatcher), powerWatcher, vpnWatcher, presence, screenshot);
             pipe = new PipeServer(processor, config.Ipc, () => hostRef?.TickMs ?? 1000, msg => logger.Log(msg), sensorHub);
         }
 
@@ -300,6 +326,8 @@ public static class Program
             displayCts.Cancel();
             displayLauncher?.Dispose();
             displayClient?.Dispose();
+            localPresence?.Dispose();
+            localShooter?.Dispose();
             lasso?.Dispose();
         };
 

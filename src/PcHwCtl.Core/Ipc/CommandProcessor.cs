@@ -36,6 +36,8 @@ public sealed class CommandProcessor
     private readonly IPowerActions? _actions;
     private readonly IPowerStatus? _status;
     private readonly IVpnStatus? _vpn;
+    private readonly IPresence? _presence;
+    private readonly IScreenshot? _screenshot;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="CommandProcessor"/> class.
@@ -45,9 +47,11 @@ public sealed class CommandProcessor
     public CommandProcessor(IFanControl fans, IRgbControl rgb, Func<IpcConfig> ipcConfig, IClock clock, PersistedSettings? persisted = null, IDisplayControl? displays = null, ILassoControl? lasso = null, SensorFeedHub? sensors = null,
         IProcessActivity? processes = null, IPowerRequests? power = null,
         IPowerPlans? plans = null, Func<PowerConfig>? powerConfig = null, IPowerActions? actions = null,
-        IPowerStatus? status = null, IVpnStatus? vpn = null)
+        IPowerStatus? status = null, IVpnStatus? vpn = null, IPresence? presence = null, IScreenshot? screenshot = null)
     {
         _vpn = vpn;
+        _presence = presence;
+        _screenshot = screenshot;
         _actions = actions;
         _status = status;
         _displays = displays;
@@ -100,6 +104,12 @@ public sealed class CommandProcessor
                 "eco" => HandleEco(tokens),
                 "proc" => HandleProc(tokens),
                 "vpn" => tokens.Length != 1 ? Error("Usage: vpn") : _vpn == null ? Error("VPN check is off (config vpn.enabled).") : Ok(VpnDto(_vpn.Status)),
+                "presence" => tokens.Length != 1 ? Error("Usage: presence")
+                    : _presence == null ? Error("Presence check is off (config presence.enabled).")
+                    : Ok(PresenceDto(_presence.Check())),
+                "screenshot" => tokens.Length != 3 ? Error("Usage: screenshot <nonce> <webhook>")
+                    : _screenshot == null ? Error("Screenshots are off (config screenshot.enabled).")
+                    : Ok(ShotDto(tokens[1], _screenshot.Take(tokens[1], tokens[2]))),
                 "power" => HandlePower(tokens),
                 "release" => HandleGenericRelease(tokens),
                 _ => Error($"Unknown command '{tokens[0]}'.")
@@ -478,6 +488,18 @@ public sealed class CommandProcessor
             return Error(ex.Message);
         }
     }
+
+    private static object PresenceDto(PresenceResult r) => new
+    {
+        present = r.State,
+        conf = Math.Round(r.Conf, 3),
+        luma = Math.Round(r.Luma, 1),
+        why = r.Why,
+        device = r.Device,
+        ms = r.Ms
+    };
+
+    private static object ShotDto(string nonce, ShotResult r) => new { nonce, accepted = r.Accepted, why = r.Why };
 
     private static object VpnDto(VpnStatus s) => new
     {
