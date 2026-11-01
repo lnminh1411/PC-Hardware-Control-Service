@@ -32,6 +32,7 @@ public sealed class PowerWatcher : IPowerStatus, IFeedSource, IDisposable
     private readonly CancellationTokenSource _cts = new();
     private readonly List<EventLogWatcher> _watchers = [];
     private GoingState _going = GoingState.None;
+    private long _goingAwakeMs;   // AwakeClock when _going was set: wall time running ahead of it means the PC slept since
     private LastDown _lastDown = LastDown.Unknown;
     private WakeInfo? _wake;
     private UpdateState _update = UpdateState.None;
@@ -46,8 +47,29 @@ public sealed class PowerWatcher : IPowerStatus, IFeedSource, IDisposable
     {
         get
         {
-            lock (_lock) return new PowerStatus(_going, _lastDown, _wake, _update, _lastDo);
+            lock (_lock)
+            {
+                ClearSleepIfWoken();
+                return new PowerStatus(_going, _lastDown, _wake, _update, _lastDo);
+            }
         }
+    }
+
+    /// <summary>
+    /// A sleep or hibernate going ends the moment the PC is back: wall time has run ahead of awake time by the time asleep.
+    /// Waiting for the wake event or the 120 s clear let the board read "going to sleep" again right after "PC is on".
+    /// </summary>
+    private void ClearSleepIfWoken()
+    {
+        if (_going.Kind is not ("sleep" or "hibernate")) return;
+        double wallMs = (DateTime.UtcNow - _going.AtUtc).TotalMilliseconds;
+        if (wallMs - (AwakeClock.Ms - _goingAwakeMs) > 5_000) _going = GoingState.None;
+    }
+
+    private void SetGoing(GoingState going)
+    {
+        _going = going;
+        _goingAwakeMs = AwakeClock.Ms;
     }
 
     public void Start()
@@ -71,7 +93,7 @@ public sealed class PowerWatcher : IPowerStatus, IFeedSource, IDisposable
         {
             _lastDo = new PowerDoResult(name, outcome, PowerReasons.Clean(why), DateTime.UtcNow);
             if (outcome == "accepted" && action is PowerAction.Sleep or PowerAction.Hibernate)
-                _going = new GoingState(name, "board", "power do", "-", "-", 0, DateTime.UtcNow);
+                SetGoing(new GoingState(name, "board", "power do", "-", "-", 0, DateTime.UtcNow));
         }
         _log($"Power: {name} {outcome}{(why == "-" || why == "" ? "" : ": " + why)}.");
     }
@@ -138,7 +160,7 @@ public sealed class PowerWatcher : IPowerStatus, IFeedSource, IDisposable
         string code = PowerReasons.TryParseCode(d.Get("param4"), out uint c) ? PowerReasons.DescribeCode(c) : PowerReasons.Clean(d.Get("param4"));
         var going = new GoingState(kind, by == "" ? "-" : by, PowerReasons.Why(d.Get("param3"), d.Get("param6")), code,
             PowerReasons.Clean(d.Get("param7")), rec.RecordId ?? 0, DateTime.UtcNow);
-        lock (_lock) _going = going;
+        lock (_lock) SetGoing(going);
         _log($"Power: going {going.Kind} by {going.By} ({going.Why}, {going.Code}, {going.User}) id={going.Id}.");
     }
 
@@ -161,7 +183,7 @@ public sealed class PowerWatcher : IPowerStatus, IFeedSource, IDisposable
             string kind = action.Contains("Reset", StringComparison.OrdinalIgnoreCase) ? "restart" : "shutdown";
             going = new GoingState(kind, "-", PowerReasons.Why(why, action), "-", "-", rec.RecordId ?? 0, DateTime.UtcNow);
         }
-        lock (_lock) _going = going;
+        lock (_lock) SetGoing(going);
         _log($"Power: going {going.Kind} ({going.Why}) id={going.Id}.");
     }
 
@@ -199,6 +221,7 @@ public sealed class PowerWatcher : IPowerStatus, IFeedSource, IDisposable
                 lock (_lock)
                 {
                     _update = new UpdateState(by != "-", by, running);
+                    ClearSleepIfWoken();
                     if (_going.Kind != "none" && (DateTime.UtcNow - _going.AtUtc).TotalSeconds >= GoingClearS) _going = GoingState.None;
                 }
             }

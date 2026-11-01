@@ -20,7 +20,7 @@ public sealed class EngineHost : IDisposable
     private readonly bool _refreshHardware;
 
     private DateTime _lastConfigMtime;
-    private DateTime _lastTickCompleted = DateTime.UtcNow;
+    private long _lastTickCompletedMs = AwakeClock.Ms;   // awake time: sleep and hibernate don't count
     private volatile bool _stopped;
     private int _shutdownRan;
     private int _tickMs;
@@ -69,13 +69,15 @@ public sealed class EngineHost : IDisposable
 
     public void StartWatchdog()
     {
-        _lastTickCompleted = DateTime.UtcNow;
+        _lastTickCompletedMs = AwakeClock.Ms;
         var thread = new Thread(() =>
         {
             while (!_stopped)
             {
                 Thread.Sleep(1000);
-                if (!_stopped && (DateTime.UtcNow - _lastTickCompleted) > TimeSpan.FromSeconds(10))
+                // Awake time, not wall time: after a resume the wall clock jumps by the hours asleep, which used to
+                // trip this and restart the service (a minute or more without sensors while the hardware woke up).
+                if (!_stopped && AwakeClock.Ms - Interlocked.Read(ref _lastTickCompletedMs) > 10_000)
                 {
                     _logger.Log($"Watchdog: no tick completed for 10 s (stuck in: {_tickStep}), shutting down and exiting.");
                     ShutdownAll();
@@ -181,7 +183,7 @@ public sealed class EngineHost : IDisposable
             }
 
             // 4. Update last tick completed for watchdog
-            _lastTickCompleted = DateTime.UtcNow;
+            Interlocked.Exchange(ref _lastTickCompletedMs, AwakeClock.Ms);
 
             // 5. State file for ESP32PcStats
             if (_stateFile != null)
