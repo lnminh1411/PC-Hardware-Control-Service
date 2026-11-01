@@ -20,7 +20,7 @@ public sealed class PresenceConfig
     public int Camera { get; set; }
 
     /// <summary>Person confidence for "yes". npu-bench, YOLO26x in a near-black room: away at most 0.001, seated 0.55-0.93.</summary>
-    public double MinConf { get; set; } = 0.1;
+    public double MinConf { get; set; } = 0.4;
 
     /// <summary>Mean frame brightness (0-255) below which "nobody seen" becomes "unknown": the camera can't see. YOLO26x
     /// still finds a seated person at luma 1.6 on a C270, so only a covered lens or a black frame counts.</summary>

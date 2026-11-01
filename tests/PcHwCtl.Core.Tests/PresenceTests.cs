@@ -37,7 +37,8 @@ public class PresenceTests
     {
         var cfg = new PresenceConfig();
         Assert.Equal(("yes", "-"), PresenceLogic.Decide(0.9, 120, cfg));
-        Assert.Equal(("yes", "-"), PresenceLogic.Decide(0.13, 3, cfg));      // seen even in the dark
+        Assert.Equal(("yes", "-"), PresenceLogic.Decide(0.55, 1.6, cfg));     // YOLO26x's lowest seated score, near-black room
+        Assert.Equal(("no", "-"), PresenceLogic.Decide(0.39, 80, cfg));      // below the 0.4 margin
         Assert.Equal(("no", "-"), PresenceLogic.Decide(0.001, 80, cfg));
         Assert.Equal(("no", "-"), PresenceLogic.Decide(0.001, 0.9, cfg));    // near-black room: YOLO26x still sees
         Assert.Equal(("unknown", "dark"), PresenceLogic.Decide(0.01, 0.3, cfg));   // black frame: can't tell

@@ -230,7 +230,7 @@ Config: `"vpn": { "enabled": true, "trace": true, "settleS": 5 }` (settleS 1-60)
 
 The first check after the agent starts also compiles the model (cached in `%LOCALAPPDATA%\PcHwCtl\ovcache`, about 5 s the first time).
 
-Config: `"presence": { "enabled": true, "device": "NPU", "model": "", "camera": 0, "minConf": 0.1, "darkLuma": 0.5, "settleFrames": 26 }` (`model` empty = the shipped one). The agent rereads it when the file changes.
+Config: `"presence": { "enabled": true, "device": "NPU", "model": "", "camera": 0, "minConf": 0.4, "darkLuma": 0.5, "settleFrames": 26 }` (`model` empty = the shipped one). The agent rereads it when the file changes.
 
 ## Screenshot
 
