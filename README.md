@@ -2,7 +2,16 @@
 
 > **This is for my PC only.** Sensor IDs, fan curves, LED layouts and RGB protocols are hard-wired to one machine (Gigabyte B860M GAMING X WIFI6E, IT8696E SuperIO, IT5711 RGB Fusion 2, ENE DRAM, Intel Core Ultra 7 265K, AMD Radeon RX 6600, NVIDIA GeForce RTX 3050, DELL E1715S, MSI PRO MP275). Running it on other hardware can write to the wrong registers. Use it as reference, not as a drop-in tool.
 
-Windows service (LocalSystem) replacing FanControl, OpenRGB and Twinkle Tray on my PC. Exposes a JSON-line named pipe `PcHwCtl` used by the ESP32 board helper. Companion project: [ESP32-PC-Control-System](https://github.com/lnminh1411/ESP32-PC-Control-System).
+Windows service (LocalSystem) replacing FanControl, OpenRGB and Twinkle Tray on my PC. Exposes a JSON-line named pipe `PcHwCtl` used by the ESP32 board helper.
+
+## Companion projects
+
+This service is part of the ESP32 PC Control System, the main project.
+
+| Project | Role for this service |
+|---|---|
+| [ESP32 PC Control System](https://github.com/lnminh1411/ESP32-PC-Control-System) (main project) | Desk board. Its Windows helper calls this service over the `PcHwCtl` pipe for sensors, fans and RGB, monitors, power actions, the night config, presence and screenshots |
+| [ESP32 Human Presence Radar](https://github.com/lnminh1411/ESP32-Human-Presence-Radar) | Add-on presence board (mmWave radar and ToF). To be read over USB and combined with the webcam presence check; in development |
 
 ## Features
 
