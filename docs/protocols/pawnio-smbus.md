@@ -39,4 +39,4 @@ Sizes are counts of ULONG64, not bytes.
 
 ## Locking
 
-Hold the global mutex `Global\Access_SMBUS.HTP.Method` around every transfer (create-or-open, wait up to 1 s, release after). Other tools on this PC (LibreHardwareMonitor in ESP32PcStats, HWiNFO) use the same name.
+Hold the global mutex `Global\Access_SMBUS.HTP.Method` around every transfer (create-or-open, wait up to 1 s, release after). Other SMBus users on this PC use the same name: LibreHardwareMonitor (now loaded by PcHwCtl itself; ESP32-Helper no longer runs its own) and HWiNFO.
