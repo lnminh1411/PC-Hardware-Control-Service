@@ -292,7 +292,12 @@
     "minConf": 0.4,
     "darkLuma": 0.5,
     "settleFrames": 26,
-    "minIntervalS": 10
+    "minIntervalS": 10,
+    "depth": true,
+    "depthFrames": 5,
+    "deskBelow": 0.52,
+    "roomFrom": 0.80,
+    "depthMinLuma": 12
   },
   "screenshot": {
     "enabled": true,

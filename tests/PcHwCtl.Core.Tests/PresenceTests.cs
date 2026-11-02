@@ -45,17 +45,53 @@ public class PresenceTests
     }
 
     [Fact]
-    public void Test02_MaxPersonConf()
+    public void Test02_BestPerson()
     {
-        var output = new float[PresenceLogic.Rows * PresenceLogic.Anchors];
-        output[3 * PresenceLogic.Anchors + 7] = 0.99f;   // a box value, not a score
-        output[5 * PresenceLogic.Anchors + 7] = 0.98f;   // class 1 (bicycle)
-        output[4 * PresenceLogic.Anchors + 8399] = 0.42f;
-        Assert.Equal(0.42, PresenceLogic.MaxPersonConf(output), 3);
+        const int A = PresenceLogic.Anchors;
+        var output = new float[PresenceLogic.Rows * A];
+        output[3 * A + 7] = 0.99f;   // a box value, not a score
+        output[5 * A + 7] = 0.98f;   // class 1 (bicycle)
+        output[4 * A + 8399] = 0.42f;
+        output[8399] = 320; output[A + 8399] = 240; output[2 * A + 8399] = 100; output[3 * A + 8399] = 200;
+        var p = PresenceLogic.BestPerson(output);
+        Assert.Equal(0.42, p.Conf, 3);
+        Assert.Equal((320.0, 240.0, 100.0, 200.0), (p.Cx, p.Cy, p.W, p.H));
+        Assert.Throws<ArgumentException>(() => PresenceLogic.BestPerson(new float[10]));
+    }
 
-        var half = output.Select(v => (Half)v).ToArray();
-        Assert.Equal(0.42, PresenceLogic.MaxPersonConf(half), 2);
-        Assert.Throws<ArgumentException>(() => PresenceLogic.MaxPersonConf(new float[10]));
+    [Fact]
+    public void Test12_DepthZoneAndHead()
+    {
+        var cfg = new PresenceConfig();
+        // npu-bench readings (C270 under the monitor): seated 0.55 m, behind a chair 1.1 m, 1.5 m, 1.6 m, 1.75 m
+        Assert.Equal("desk", PresenceLogic.Zone(0.455, 100, cfg));
+        Assert.Equal("near", PresenceLogic.Zone(0.585, 100, cfg));
+        Assert.Equal("near", PresenceLogic.Zone(0.747, 100, cfg));
+        Assert.Equal("near", PresenceLogic.Zone(0.797, 100, cfg));
+        Assert.Equal("room", PresenceLogic.Zone(0.847, 100, cfg));
+        Assert.Equal("-", PresenceLogic.Zone(1.005, 6.4, cfg));   // too dark: that run scattered 0.81-2.69
+
+        // 640 x 480 frame: letterboxed with 80 rows of padding top and bottom; the depth map stretches it to 768 x 768.
+        // A box over the whole frame puts the head region at x 37.5-62.5%, y 5-25% of the map.
+        var whole = new PersonBox(0.9, 320, 320, 640, 480);
+        Assert.Equal((288, 38, 481, 193), PresenceLogic.HeadRegion(whole, 640, 480));
+        var off = new PersonBox(0.9, -500, -500, 10, 10);   // outside the frame: clamped, never empty
+        var r = PresenceLogic.HeadRegion(off, 640, 480);
+        Assert.True(r.X1 > r.X0 && r.Y1 > r.Y0);
+
+        var depth = new float[PresenceLogic.DepthSize * PresenceLogic.DepthSize];
+        depth.AsSpan().Fill(2f);
+        for (int y = 38; y < 193; y++) depth.AsSpan(y * 768 + 288, 481 - 288).Fill(0.5f);
+        Assert.Equal(0.5, PresenceLogic.RegionMedian(depth, (288, 38, 481, 193)), 3);
+        Assert.Equal(2.5, PresenceLogic.Median(new float[] { 4, 1, 2, 3 }), 3);
+        Assert.Throws<ArgumentException>(() => PresenceLogic.RegionMedian(new float[10], (0, 0, 1, 1)));
+
+        var stretched = new byte[768 * 3 * 768];
+        stretched[0] = 255;   // pixel 0 pure blue
+        var input = new float[3 * 768 * 768];
+        PresenceLogic.FillDepthInput(stretched, 768 * 3, input);
+        Assert.Equal((0f, 0f, 1f), (input[0], input[768 * 768], input[2 * 768 * 768]));
+        Assert.Equal(0f, input[1]);   // no grey padding
     }
 
     [Fact]
@@ -167,7 +203,7 @@ public class PresenceTests
     [Fact]
     public void Test05_Ipc()
     {
-        var presence = new FakePresence(new PresenceResult("yes", 0.91234, 96.27, "-", "NPU", 1430));
+        var presence = new FakePresence(new PresenceResult("yes", 0.91234, 96.27, "-", "NPU", 1430, "near", 0.74712));
         var shooter = new FakeShooter();
         var proc = new CommandProcessor(new IpcFakeFanControl(), new IpcFakeRgbControl(), () => new IpcConfig(), new IpcFakeClock(),
             presence: presence, screenshot: shooter);
@@ -176,6 +212,8 @@ public class PresenceTests
         Assert.Contains("\"present\":\"yes\"", json);
         Assert.Contains("\"conf\":0.912", json);
         Assert.Contains("\"device\":\"NPU\"", json);
+        Assert.Contains("\"zone\":\"near\"", json);
+        Assert.Contains("\"depth\":0.747", json);
         Assert.Equal(1, presence.Checks);
         Assert.Contains("Usage: presence", proc.Execute("presence now"));
 
@@ -200,6 +238,10 @@ public class PresenceTests
         Assert.Contains("borderS", ex.Message);
         ex = Assert.Throws<ConfigException>(() => ConfigLoader.Validate(new Config { Presence = new PresenceConfig { MinIntervalS = -1 } }));
         Assert.Contains("minIntervalS", ex.Message);
+        ex = Assert.Throws<ConfigException>(() => ConfigLoader.Validate(new Config { Presence = new PresenceConfig { DeskBelow = 0.9 } }));   // above roomFrom
+        Assert.Contains("deskBelow", ex.Message);
+        ex = Assert.Throws<ConfigException>(() => ConfigLoader.Validate(new Config { Presence = new PresenceConfig { DepthFrames = 0 } }));
+        Assert.Contains("depthFrames", ex.Message);
     }
 
     [Fact]

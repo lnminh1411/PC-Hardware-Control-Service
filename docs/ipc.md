@@ -48,7 +48,7 @@ Names are case-insensitive. `<fan>` = a fan key from config or `all`. `<group>` 
 | `power do <sleep\|hibernate\|restart\|shutdown\|lock> [delayMs]` | accepted: `{action, accepted:true}`, the action runs as SYSTEM after `delayMs` (0-10000). Declined: `ok:false` and the reason in `error` (see [Power actions and events](#power-actions-and-events)) |
 | `power status` | `{going:{kind, by, why, code, user, id, at}, lastDown:{kind, at, by, why}, wake:{from, at, sleptAt, by}\|null, update:{pending, pendingBy, running}, lastDo:{action, outcome, why, at}\|null}`: why the PC is going down now, how it last went down, the last wake, Windows Update state, and the last `power do` |
 | `vpn` | `{kind, by, stack, exit:{ip, loc, warp}, checkedAt, tracedAt}`, see [VPN check](#vpn-check) |
-| `presence` | one webcam check now (1-3 s): `{present, conf, luma, why, device, ms}`, see [Presence](#presence) |
+| `presence` | one webcam check now (2-5 s): `{present, conf, luma, why, device, ms, zone, depth}`, see [Presence](#presence) |
 | `screenshot <nonce> <webhook>` | `{nonce, accepted, why}`: captures every monitor, then a red border and a Discord post deleted later, see [Screenshot](#screenshot) |
 | `proc top [n]` | the n (default 5, 1-50) busiest exes over the last second: `{processes:[{exe, cores, instances}]}`, `cores` 1.0 = one core busy, summed over instances. Includes system and kept processes |
 | `get sensors` | latest sensor feed snapshot as JSON: `{seq, ts, values: {cpu_temp: 41.8, gpu1_fan: null, ..., power_plan: "PcHwCtl Night", ...}}`. Numbers are rounded to 2 decimals, text keys are strings. `No sensor snapshot yet.` before the first |
@@ -240,9 +240,11 @@ Config: `"vpn": { "enabled": true, "trace": true, "settleS": 5 }` (settleS 1-60)
 
 As an intrusion check it has limits: only a nearly black frame reads `unknown`, so a lens cover that lets light through can read `no`, and one frame can't tell a photo from a person. A client should alert on `unknown` too.
 
-**How:** the display agent (the user's session; session 0 has no camera access) opens camera `presence.camera` through DirectShow at 640x480, drops `settleFrames` (default 26, about 1 s) while exposure settles, keeps one frame and closes the camera, so the LED is on for about 1-2 s. YOLO26x (COCO, shipped in `models\yolo26x-fp16-ov`, about 65 ms on the NPU) runs on `presence.device` (default NPU through OpenVINO; CPU when the NPU fails). The answer is the best person score.
+**How:** the display agent (the user's session; session 0 has no camera access) opens camera `presence.camera` through DirectShow at 640x480, drops `settleFrames` (default 26, about 1 s) while exposure settles, keeps one frame, with `depth` on also `depthFrames - 1` more about 0.1 s apart, and closes the camera, so the LED is on for about 2-3 s. YOLO26x (COCO, shipped in `models\yolo26x-fp16-ov`, about 65 ms on the NPU) runs on `presence.device` (default NPU through OpenVINO; CPU when the NPU fails). The answer is the best person score.
 
-**Privacy:** the frame lives only in the agent's memory. The agent never writes it to a file or sends it: the camera frame, its scaled copy and the model's input tensor are zeroed right after inference, before the reply. Buffers inside OpenCV's DirectShow backend, its resize, the NPU plugin and the CPU fallback are not wiped, and Windows can page any of this memory out. Only the fields below leave the agent, and the agent doesn't log them.
+**Depth:** when the answer is `yes`, `depth` is on and luma is at least `depthMinLuma`, YOLO26x-depth (shipped in `models\yolo26x-depth-fp16-ov`, about 0.1 s a frame on the NPU) runs on every kept frame, stretched to 768x768. Each frame's reading is the median depth in the top centre of the person box (x 37.5-62.5%, y 5-25%: the head; within 3% of a pose model's head point), and `depth` is the median over the frames. It is the model's raw value, not metres: on the C270 under the monitor it reads distance squeezed (0.55 m read 0.455, 1.0 m 0.639, 1.5 m 0.747, 2.0 m 0.857) and can't tell 1.75 m from 2.0 m. `zone` buckets it with `deskBelow` and `roomFrom`, which every calibration point (with and without a chair in front, light and dim) fell inside. In dim light (luma 15) readings drop about 12%; at luma 6 a seated reading held steady but rose 14% (0.52) and a standing one at 1.5 m scattered (0.8-2.7), so below `depthMinLuma` `depth` is still reported but `zone` is `-`. A depth failure leaves `zone` at `-`; `present` still answers.
+
+**Privacy:** the frame lives only in the agent's memory. The agent never writes it to a file or sends it: the camera frames, their scaled and stretched copies, the model input tensors and the depth maps are zeroed right after inference, before the reply. Buffers inside OpenCV's DirectShow backend, its resize, the NPU plugin and the CPU fallback are not wiped, and Windows can page any of this memory out. Only the fields below leave the agent, and the agent doesn't log them.
 
 | Field | Meaning |
 |---|---|
@@ -252,10 +254,12 @@ As an intrusion check it has limits: only a nearly black frame reads `unknown`, 
 | `why` | `-`, or why `present` is `unknown`: `dark` (nobody seen and luma < `darkLuma`, default 0.5: a covered lens or black frame), `camera` (in use, unplugged, or Windows camera access for desktop apps off), `model` (OpenVINO failed), `agent` (no display agent, e.g. nobody logged on), `off` |
 | `device` | where the model ran: `NPU`, `CPU`, `-` |
 | `ms` | how long the check took |
+| `zone` | `desk` (depth < `deskBelow`, default 0.52: seated or right behind the chair), `near` (up to `roomFrom`, default 0.80: about 0.8-1.6 m), `room` (beyond), or `-` (nobody seen, depth off or failed, or luma < `depthMinLuma`, default 12) |
+| `depth` | raw depth-model reading at the head, median over `depthFrames`; 0 when nobody was seen or depth is off or failed. Larger is farther, not metres; below `depthMinLuma` it reads high and can scatter |
 
-The first check after the agent starts also compiles the model (cached in `%LOCALAPPDATA%\PcHwCtl\ovcache`, about 5 s the first time).
+The first check after the agent starts also compiles the models (cached in `%LOCALAPPDATA%\PcHwCtl\ovcache`, about 5 s each the first time).
 
-Config: `"presence": { "enabled": true, "device": "NPU", "model": "", "camera": 0, "minConf": 0.4, "darkLuma": 0.5, "settleFrames": 26, "minIntervalS": 10 }` (`enabled` defaults to false; `model` empty = the shipped one). The agent rereads it when the file changes; the service reads `enabled` only at start. `pchwctl presence-test` runs two checks in a console with the installed config, for diagnosis.
+Config: `"presence": { "enabled": true, "device": "NPU", "model": "", "camera": 0, "minConf": 0.4, "darkLuma": 0.5, "settleFrames": 26, "minIntervalS": 10, "depth": true, "depthModel": "", "depthFrames": 5, "deskBelow": 0.52, "roomFrom": 0.80, "depthMinLuma": 12 }` (`enabled` defaults to false; `model` and `depthModel` empty = the shipped ones; `depthFrames` 1-15; `0 < deskBelow < roomFrom`). Don't raise the camera's gain for the dark: at gain 255 sensor noise alone lifts a black frame to luma 0.7, past `darkLuma`, turning `unknown` into `no`. The agent rereads it when the file changes; the service reads `enabled` only at start. `pchwctl presence-test` runs two checks in a console with the installed config, for diagnosis.
 
 ## Screenshot
 

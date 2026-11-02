@@ -4,7 +4,7 @@ using PcHwCtl.Core.Activity;
 namespace PcHwCtl.Service.Activity;
 
 /// <summary>
-/// YOLO (YOLO26x by default) on OpenVINO through its C API (openvino_c.dll from the OpenVINO.runtime.win package), just the calls one
+/// YOLO (YOLO26x and YOLO26x-depth by default) on OpenVINO through its C API (openvino_c.dll from the OpenVINO.runtime.win package), just the calls one
 /// static-shape model needs. Compiled once and kept; the input tensor is wiped after every inference.
 /// </summary>
 public sealed unsafe class YoloModel : IDisposable
@@ -68,11 +68,12 @@ public sealed unsafe class YoloModel : IDisposable
     }
 
     /// <summary>
-    /// fill writes the frame into the [1, 3, 640, 640] input; returns the best person score. The input tensor is
-    /// zeroed afterwards, whatever happens.
+    /// fill writes the frame into the input; read gets output 0 as f32 (f16 outputs are widened into a copy) and
+    /// returns the answer. The input tensor and any copy are zeroed afterwards, whatever happens.
     /// </summary>
-    public double Infer(SpanAction fill)
+    public T Infer<T>(SpanAction fill, OutputFunc<T> read)
     {
+        float[]? wide = null;
         IntPtr input = IntPtr.Zero, output = IntPtr.Zero;
         Span<float> data = default;
         try
@@ -91,19 +92,24 @@ public sealed unsafe class YoloModel : IDisposable
             Check(ov_tensor_get_byte_size(output, out nuint outBytes), "output bytes");
             Check(ov_tensor_data(output, out IntPtr outPtr), "output data");
             int n = checked((int)outCount);
-            if (outBytes == outCount * 2) return PresenceLogic.MaxPersonConf(new ReadOnlySpan<Half>((void*)outPtr, n));
-            if (outBytes == outCount * sizeof(float)) return PresenceLogic.MaxPersonConf(new ReadOnlySpan<float>((void*)outPtr, n));
-            throw new InvalidOperationException($"model output is not f16 or f32 ({outBytes} bytes for {outCount} values)");
+            if (outBytes == outCount * sizeof(float)) return read(new ReadOnlySpan<float>((void*)outPtr, n));
+            if (outBytes != outCount * 2) throw new InvalidOperationException($"model output is not f16 or f32 ({outBytes} bytes for {outCount} values)");
+            wide = new float[n];
+            var half = new ReadOnlySpan<Half>((void*)outPtr, n);
+            for (int i = 0; i < n; i++) wide[i] = (float)half[i];
+            return read(wide);
         }
         finally
         {
-            data.Clear();   // the frame, letterboxed: gone before the answer leaves
+            data.Clear();   // the frame: gone before the answer leaves
+            if (wide != null) Array.Clear(wide);   // a depth map is a picture of the room too
             if (output != IntPtr.Zero) ov_tensor_free(output);
             if (input != IntPtr.Zero) ov_tensor_free(input);
         }
     }
 
     public delegate void SpanAction(Span<float> input);
+    public delegate T OutputFunc<out T>(ReadOnlySpan<float> output);
 
     public void Dispose()
     {

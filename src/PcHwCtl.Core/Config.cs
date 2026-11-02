@@ -374,6 +374,10 @@ public static class ConfigLoader
         if (string.IsNullOrWhiteSpace(presence.Device)) errors.Add("Presence device is empty.");
         if (config.Screenshot.DeleteMin is < 0 or > 10_080) errors.Add($"Screenshot deleteMin {config.Screenshot.DeleteMin} must be 0-10080 (a week).");
         if (presence.MinIntervalS is < 0 or > 3600) errors.Add($"Presence minIntervalS {presence.MinIntervalS} must be 0-3600.");
+        if (presence.DepthFrames is < 1 or > 15) errors.Add($"Presence depthFrames {presence.DepthFrames} must be 1-15.");
+        if (!(presence.DeskBelow > 0 && presence.DeskBelow < presence.RoomFrom && presence.RoomFrom < 100))
+            errors.Add($"Presence deskBelow {presence.DeskBelow} and roomFrom {presence.RoomFrom} must satisfy 0 < deskBelow < roomFrom < 100.");
+        if (presence.DepthMinLuma is < 0 or > 255) errors.Add($"Presence depthMinLuma {presence.DepthMinLuma} must be 0-255.");
         if (config.Screenshot.BorderS is < 1 or > 60) errors.Add($"Screenshot borderS {config.Screenshot.BorderS} must be 1-60.");
         if (config.Screenshot.MinIntervalS is < 0 or > 3600) errors.Add($"Screenshot minIntervalS {config.Screenshot.MinIntervalS} must be 0-3600.");
 

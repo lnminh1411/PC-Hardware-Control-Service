@@ -12,7 +12,7 @@ Windows service (LocalSystem) replacing FanControl, OpenRGB and Twinkle Tray on 
 - **Process Lasso**: Direct `prolasso.ini` parser and editor; live CPU affinity pinning (`aff`); profile saving and loading (`lasso`); Windows efficiency mode (EcoQoS) enforcement and background sweep (`eco`).
 - **Activity and power**: Per-process CPU usage tracking (`proc top`) via `NtQuerySystemInformation`; Windows wake locks inspection via `powercfg /requests`; Windows power plan switching including "PcHwCtl Night" (30 % max / 5 % min processor state, Balanced's core parking, display off after 5 min); SYSTEM power transitions (`sleep`, `hibernate`, `restart`, `shutdown`, `lock`); Event Log shutdown, wake, and update reboot tracking.
 - **VPN check**: classifies the adapter carrying internet traffic as `none`, `warp` (Cloudflare WARP) or `vpn`, lists stacked tunnels, and on a change reads the exit IP and country from Cloudflare's trace page (`vpn`); checked on Windows adapter events only.
-- **Presence**: one webcam check on request (`presence`): YOLO26x through OpenVINO on the NPU (CPU fallback) in the user-session agent; frames stay in the agent's memory, only the verdict leaves. Off unless `presence.enabled`.
+- **Presence**: one webcam check on request (`presence`): YOLO26x through OpenVINO on the NPU (CPU fallback) in the user-session agent, plus YOLO26x-depth for a rough distance zone (`desk`, `near`, `room`) and the raw reading; frames stay in the agent's memory, only the verdict leaves. Off unless `presence.enabled`.
 - **Screenshot**: `screenshot <nonce> <webhook>` captures every monitor in the agent, shows a red border, then the service posts the PNG to an allowlisted Discord webhook and deletes the post later. Off unless `screenshot.enabled`.
 - **Sensor feed**: Central LibreHardwareMonitor reader with split-loop polling (500 ms fast, 1000 ms background CPU/memory); JSON queries and snapshot text streaming over named pipe (`get sensors`, `subscribe sensors`).
 - **State file and persisted settings**: Atomic state export to `C:\ProgramData\PcHwCtl\state.txt` for ESP32-Helper (ESP32PcStats); persisted Zero RPM toggles and RGB brightness in `C:\ProgramData\PcHwCtl\settings.json`.
@@ -40,7 +40,7 @@ Built for this specific machine:
 - .NET 10 runtime (`net10.0-windows`)
 - PawnIO driver and `C:\Program Files\PawnIO\PawnIOLib.dll`
 - LibreHardwareMonitorLib 0.9.6, OpenCvSharp4 and OpenVINO runtime (bundled via NuGet)
-- Git LFS, for the presence model in `models/yolo26x-fp16-ov` (copied next to the exe on publish)
+- Git LFS, for the presence models in `models/yolo26x-fp16-ov` and `models/yolo26x-depth-fp16-ov` (copied next to the exe on publish)
 - Administrator rights to install and to run `pchwctl` (PawnIO); `ipc`, `display-agent`, `presence-test` and `import-fancontrol` need none. The service runs as LocalSystem
 
 ## Build and install
@@ -87,7 +87,7 @@ Installed and read from `C:\ProgramData\PcHwCtl\pchwctl.json` (template at `conf
 - `displays`: `enabled`, DDC/CI polling interval (`pollS`) and per-model power methods (`models`).
 - `feed`: `enabled`, sensor feed interval (`intervalMs`), lookup retry (`resolveS`), per-hardware intervals (`every`), power request polling (`requestsPollS`) and feed `keys`.
 - `vpn`: `enabled`, Cloudflare trace on change (`trace`), and adapter event settle time (`settleS`).
-- `presence`: `enabled` (default off), OpenVINO `device`, `model`, `camera`, `minConf`, `darkLuma`, `settleFrames`, `minIntervalS`.
+- `presence`: `enabled` (default off), OpenVINO `device`, `model`, `camera`, `minConf`, `darkLuma`, `settleFrames`, `minIntervalS`, and depth: `depth`, `depthModel`, `depthFrames`, `deskBelow`, `roomFrom`, `depthMinLuma`.
 - `screenshot`: `enabled` (default off), allowed Discord webhook ids (`webhookIds`), `deleteMin`, `borderS`, `minIntervalS`.
 - `power`: Active power scheme mappings for `nightPlan` and `dayPlan`.
 - `lasso`: `enabled`, Process Lasso configuration path (`ini`), profile directory (`profilesDir`), and eco sweep interval (`ecoSweepS`).

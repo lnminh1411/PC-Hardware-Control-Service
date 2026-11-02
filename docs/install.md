@@ -7,7 +7,7 @@ Guide for installing, configuring, and maintaining the PcHwCtl Windows service a
 - **.NET 10 runtime**: Windows x64 runtime (.NET 10.0 Windows Desktop / Server runtime).
 - **PawnIO driver**: Kernel driver installed on the system (typically already installed by FanControl for direct hardware/SMBus access).
 - **Administrator shell**: PowerShell or Command Prompt with elevated privileges (`Run as Administrator`).
-- **Git LFS**: the presence model (`models/yolo26x-fp16-ov/*.bin`) is stored in LFS; publish copies the model next to the exe.
+- **Git LFS**: the presence models (`models/yolo26x-fp16-ov/*.bin`, `models/yolo26x-depth-fp16-ov/*.bin`) are stored in LFS; publish copies them next to the exe.
 
 ## Building and publishing
 
@@ -41,7 +41,7 @@ Run `scripts/install.ps1` from an elevated PowerShell terminal:
 
 1. Unless `-SkipPublish` is specified, runs `publish.ps1`.
 2. Stops the `PcHwCtl` service if already running (waiting up to 15 seconds), then any leftover `pchwctl` process running from the install directory (display agents would lock it).
-3. Empties `C:\Program Files\PcHwCtl\` and copies the published binaries (and the presence model) into it.
+3. Empties `C:\Program Files\PcHwCtl\` and copies the published binaries (and the presence models) into it.
 4. Copies configuration template to `C:\ProgramData\PcHwCtl\pchwctl.json` if missing or if `-ForceConfig` is passed.
 5. Restricts `C:\Program Files\PcHwCtl\` and `C:\ProgramData\PcHwCtl\`: owner Administrators, full control for SYSTEM and Administrators. Users can read the install directory (the display agent runs from it) but only `pchwctl.json` in the data directory (the agent reads it); the logs, state file and screenshot deletes stay private.
 

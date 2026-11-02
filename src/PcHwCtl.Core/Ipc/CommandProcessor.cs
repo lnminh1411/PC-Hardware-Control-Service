@@ -496,7 +496,9 @@ public sealed class CommandProcessor
         luma = Math.Round(r.Luma, 1),
         why = r.Why,
         device = r.Device,
-        ms = r.Ms
+        ms = r.Ms,
+        zone = r.Zone,
+        depth = Math.Round(r.Depth, 3)
     };
 
     private static object ShotDto(string nonce, ShotResult r) => new { nonce, accepted = r.Accepted, why = r.Why };

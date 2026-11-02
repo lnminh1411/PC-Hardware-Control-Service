@@ -16,6 +16,7 @@
   <ItemGroup>
     <!-- YOLO26x (Ultralytics, AGPL-3.0) as OpenVINO IR fp16, shipped next to pchwctl.exe; the .bin is in Git LFS -->
     <None Include="..\..\models\yolo26x-fp16-ov\*" Link="models\yolo26x-fp16-ov\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\..\models\yolo26x-depth-fp16-ov\*" Link="models\yolo26x-depth-fp16-ov\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

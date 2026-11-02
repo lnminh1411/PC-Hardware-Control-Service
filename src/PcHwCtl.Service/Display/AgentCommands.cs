@@ -49,7 +49,8 @@ public sealed class AgentFeatures(AgentDisplayClient client) : IPresence
         if (reply == null) return PresenceResult.Unknown("agent");
         var r = Data<PresenceResult>(reply);
         // Only the agent's own words: a reply that isn't one of them reads as "the agent failed".
-        return r is { State: "yes" or "no" or "unknown" } && double.IsFinite(r.Conf) && double.IsFinite(r.Luma) ? r : PresenceResult.Unknown("agent");
+        return r is { State: "yes" or "no" or "unknown", Zone: "-" or "desk" or "near" or "room" } && double.IsFinite(r.Conf)
+            && double.IsFinite(r.Luma) && double.IsFinite(r.Depth) ? r : PresenceResult.Unknown("agent");
     }
 
     /// <summary>The agent's capture; the PNG is the caller's to clear.</summary>
