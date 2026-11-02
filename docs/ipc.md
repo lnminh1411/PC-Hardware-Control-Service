@@ -221,7 +221,7 @@ As an intrusion check it has limits: only a nearly black frame reads `unknown`, 
 
 **How:** the display agent (the user's session; session 0 has no camera access) opens camera `presence.camera` through DirectShow at 640x480, drops `settleFrames` (default 26, about 1 s) while exposure settles, keeps one frame and closes the camera, so the LED is on for about 1-2 s. YOLO26x (COCO, shipped in `models\yolo26x-fp16-ov`, about 65 ms on the NPU) runs on `presence.device` (default NPU through OpenVINO; CPU when the NPU fails). The answer is the best person score.
 
-**Privacy:** the frame lives only in the agent's memory. The agent never writes it to a file or sends it: the camera frame, its scaled copy and the model's input tensor are zeroed right after inference, before the reply. Buffers inside OpenCV's DirectShow backend and the NPU plugin are not wiped, and Windows can page any of this memory out. Only the fields below leave the agent, and the agent doesn't log them.
+**Privacy:** the frame lives only in the agent's memory. The agent never writes it to a file or sends it: the camera frame, its scaled copy and the model's input tensor are zeroed right after inference, before the reply. Buffers inside OpenCV's DirectShow backend, its resize, the NPU plugin and the CPU fallback are not wiped, and Windows can page any of this memory out. Only the fields below leave the agent, and the agent doesn't log them.
 
 | Field | Meaning |
 |---|---|
@@ -238,23 +238,31 @@ Config: `"presence": { "enabled": true, "device": "NPU", "model": "", "camera": 
 
 ## Screenshot
 
-`screenshot <nonce> <webhook>` (from the ESP32 helper's `S` command) runs in the display agent. It is off unless `screenshot.enabled` is true, and only goes to webhooks listed in `screenshot.webhookIds`:
+`screenshot <nonce> <webhook>` (from the ESP32 helper's `S` command). It is off unless `screenshot.enabled` is true, and only goes to webhooks listed in `screenshot.webhookIds`. The display agent captures and shows the border; the service posts, so the webhook never enters the user's session:
 
-1. Captures every monitor into one PNG, in memory only.
-2. Shows a red border and "Screenshot Captured" on every monitor for `borderS` seconds (1-60). The border comes after the capture, so it is never in the image. If it can't be shown, the PNG is not posted.
-3. Once the border is up, posts the PNG to the Discord webhook (`?wait=true`, for the message id), then zeroes it. The upload doesn't wait for the border to end.
-4. Deletes the post `deleteMin` minutes later. Due deletes live in `%LOCALAPPDATA%\PcHwCtl\shot-deletes.txt`, so a restart doesn't lose them. No answer, a timeout, HTTP 408, 429 or 5xx are retried with growing gaps for 7 days. Any other refusal, or running out of time, logs that the post is still on Discord.
+1. The service checks the webhook, then asks the agent for a capture (`shot <nonce>`, no webhook).
+2. The agent refuses when nobody could see the border: the displays are off (Windows' console display state, or every monitor powered off over DDC), or the desktop is locked or behind a UAC prompt.
+3. It captures every monitor into one PNG, in memory only, then shows a red border and "Screenshot Captured" on every monitor for `borderS` seconds (1-60). The border comes after the capture, so it is never in the image. If it can't be shown, the PNG is discarded.
+4. The PNG goes to the service as raw bytes after the reply line, and the agent zeroes its copy.
+5. The service waits until the border has been up for `borderS`, posts the PNG to the Discord webhook (`?wait=true`, for the message id; redirects are not followed), then zeroes it.
+6. It deletes the post `deleteMin` minutes later. Due deletes live in `C:\ProgramData\PcHwCtl\shot-deletes.txt` (admin-only), so a restart doesn't lose them. No answer, a timeout, HTTP 408, 429 or 5xx are retried with growing gaps for 7 days. Any other refusal, or running out of time, logs that the post is still on Discord. A service stop waits for a post in flight, so its delete is recorded.
 
-The reply comes after the capture; the border and the upload run on. `accepted:false` and `why`:
-- `busy`: the last screenshot is still uploading, or came less than `minIntervalS` ago (default 10).
+The reply comes after the capture (about a second); the post follows `borderS` later. `accepted:false` and `why`:
+- `busy`: the last screenshot is still posting, or came less than `minIntervalS` ago (default 10).
 - `webhook`: not a plain `https://discord.com/api/webhooks/<id>/<token>` URL (only `?thread_id=` may follow), or `<id>` isn't in `webhookIds`. Any program can create its own Discord webhook, so this list is what stops a pipe client sending the desktop to itself.
-- `capture`: e.g. the desktop is locked.
-- `agent`: no display agent.
+- `display`: the displays are off, so the border would go unseen.
+- `locked`: the desktop is locked, or a secure prompt is up.
+- `capture`: the capture or the border failed.
+- `agent`: no display agent, or it didn't answer.
 - `off`: screenshots are off.
 
-The webhook URL is kept out of the logs. On disk it is in `shot-deletes.txt`, sealed with DPAPI for the logged-on user. Discord may keep a deleted attachment for a while.
+Every request and its outcome is in the service log (`log.txt`), without the webhook. On disk the webhook is in `shot-deletes.txt`, sealed with DPAPI for SYSTEM. Discord may keep a deleted attachment for a while.
 
 Config: `"screenshot": { "enabled": true, "webhookIds": ["1234567890"], "deleteMin": 5, "borderS": 5, "minIntervalS": 10 }` (`enabled` defaults to false, `webhookIds` to none; `deleteMin` 0 = keep the post). The id is the number in the webhook URL, not its token.
+
+### The agent link
+
+The service starts the display agent in the logged-on user's session with a new random pipe name each time (`PcHwCtl-display-<32 hex>`), and only talks to the process it started: the pipe's server pid must be that agent's. Any account can run the installed exe, so neither the pipe name nor the exe path would prove anything. Replies are limited to 64 KiB a line, and monitor lists are checked before the service uses them.
 
 ## Zero RPM (GPU fans)
 

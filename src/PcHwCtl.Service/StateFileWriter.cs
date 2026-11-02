@@ -130,6 +130,8 @@ public sealed class StateFileWriter
 
     private static void Add(StringBuilder sb, string key, string value)
     {
+        // One key per line: a monitor or plan name with a newline must not add lines of its own (as SensorFeed does).
+        value = value.Replace('\r', ' ').Replace('\n', ' ');
         // ESP32PcStats drops longer keys silently; shorten the name before the last segment instead.
         if (key.Length > 23)
         {

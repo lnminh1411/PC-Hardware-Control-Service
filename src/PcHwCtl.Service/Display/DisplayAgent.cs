@@ -13,13 +13,14 @@ namespace PcHwCtl.Service.Display;
 /// <summary>
 /// "pchwctl display-agent": the user-session half of display control. The service runs in session 0, which sees
 /// no monitors, so it starts this in the logged-on user's session and relays "display ..." commands over
-/// \\.\pipe\PcHwCtl-display (same words without "display"). Exits when the parent service process is gone.
+/// \\.\pipe\PcHwCtl-display-&lt;random&gt; (same words without "display"): the service names a new pipe for every launch
+/// and only talks to the process it started. Exits when the parent service process is gone.
 /// </summary>
 public static class DisplayAgent
 {
     public const string PipeName = "PcHwCtl-display";
 
-    public static async Task<int> RunAsync(string configPath, int? parentPid)
+    public static async Task<int> RunAsync(string configPath, int? parentPid, string pipeName = PipeName)
     {
         string logPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PcHwCtl", "display-agent.log");
         Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
@@ -36,8 +37,7 @@ public static class DisplayAgent
         var poller = new DisplayPoller(controller, () => config.Get().Displays.PollS, Log);
         poller.Start(cts.Token);
         using var presence = new CameraPresence(() => config.Get().Presence, Log);
-        using var shooter = new ScreenShooter(() => config.Get().Screenshot, Log);
-        shooter.Start();
+        using var shooter = new ScreenShooter(() => config.Get().Screenshot, () => controller.Displays, Log);
         var agent = new AgentCommands(controller, presence, shooter);
 
         if (parentPid is int pid)
@@ -58,12 +58,12 @@ public static class DisplayAgent
 
         try
         {
-            await ServeAsync(agent, Log, cts.Token);
+            await ServeAsync(agent, pipeName, Log, cts.Token);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             // Pipe name taken: another agent already serves this session, or something else holds the name.
-            Log($"Pipe {PipeName} unavailable ({ex.Message}), exiting.");
+            Log($"Pipe {pipeName} unavailable ({ex.Message}), exiting.");
             return 1;
         }
 
@@ -84,11 +84,11 @@ public static class DisplayAgent
         }
     }
 
-    private static async Task ServeAsync(AgentCommands agent, Action<string> log, CancellationToken ct)
+    private static async Task ServeAsync(AgentCommands agent, string pipeName, Action<string> log, CancellationToken ct)
     {
         // One client at a time, but the next instance exists before the last one closes: the name is never free for
         // another process to take, and FirstPipeInstance refuses to start on a name someone already holds.
-        var pipe = NewPipe(PipeOptions.FirstPipeInstance);
+        var pipe = NewPipe(pipeName, PipeOptions.FirstPipeInstance);
         try
         {
             while (!ct.IsCancellationRequested)
@@ -110,17 +110,26 @@ public static class DisplayAgent
                     {
                         string[] tokens = line.TrimStart('\uFEFF').Split(' ', StringSplitOptions.RemoveEmptyEntries);
                         string reply;
+                        byte[]? payload = null;
                         try
                         {
-                            reply = agent.Execute(tokens);
+                            (reply, payload) = agent.Execute(tokens);
                         }
                         catch (Exception ex)
                         {
                             reply = $"{{\"ok\":false,\"error\":{System.Text.Json.JsonSerializer.Serialize(ex.Message)}}}";
                         }
-                        // Not "presence": a line a minute would be a diary of when someone sits at the PC.
-                        if (tokens.Length > 0 && tokens[0].ToLowerInvariant() is not ("list" or "presence")) log($"{AgentCommands.ForLog(tokens)} -> {reply}");
-                        await writer.WriteLineAsync(reply);
+                        try
+                        {
+                            // Not "presence": a line a minute would be a diary of when someone sits at the PC.
+                            if (tokens.Length > 0 && tokens[0].ToLowerInvariant() is not ("list" or "presence")) log($"{string.Join(' ', tokens)} -> {reply}");
+                            await writer.WriteLineAsync(reply);
+                            if (payload != null) await pipe.WriteAsync(payload, ct);
+                        }
+                        finally
+                        {
+                            if (payload != null) Array.Clear(payload);
+                        }
                     }
                 }
                 catch (Exception ex) when (ex is IOException or OperationCanceledException)
@@ -128,7 +137,7 @@ public static class DisplayAgent
                     // Client went away mid-conversation.
                 }
 
-                var next = NewPipe(PipeOptions.None);
+                var next = NewPipe(pipeName, PipeOptions.None);
                 pipe.Dispose();
                 pipe = next;
             }
@@ -139,7 +148,7 @@ public static class DisplayAgent
         }
     }
 
-    private static NamedPipeServerStream NewPipe(PipeOptions extra) => NamedPipeServerStreamAcl.Create(PipeName, PipeDirection.InOut, 2,
+    private static NamedPipeServerStream NewPipe(string pipeName, PipeOptions extra) => NamedPipeServerStreamAcl.Create(pipeName, PipeDirection.InOut, 2,
         PipeTransmissionMode.Byte, PipeOptions.Asynchronous | extra, 0, 0, Security());
 
     /// <summary>The service (SYSTEM), administrators and the user this agent runs as.</summary>

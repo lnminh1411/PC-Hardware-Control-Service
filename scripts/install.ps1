@@ -4,7 +4,9 @@ param(
     [switch]$SkipPublish,
     [switch]$ForceConfig,
     [switch]$DisableFanControl,
-    [switch]$DisableOpenRGB
+    [switch]$DisableOpenRGB,
+    # The data directory holds files a non-admin owns (an older install, or planted): keep them after you checked them.
+    [switch]$TrustExistingData
 )
 
 $ErrorActionPreference = 'Stop'
@@ -31,33 +33,9 @@ function Invoke-NativeCommand {
     return $proc.ExitCode
 }
 
-# An elevated New-Item leaves the installing user as owner and, through CREATOR OWNER, with FullControl, so unelevated
-# code could replace what the SYSTEM service loads. SYSTEM and Administrators only; Users can read (the agent needs to).
-function Set-AdminOnlyAcl {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$Path
-    )
-
-    $admins = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-544")
-    $system = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-18")
-    $users = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-545")
-    $inherit = [System.Security.AccessControl.InheritanceFlags]"ContainerInherit, ObjectInherit"
-    $none = [System.Security.AccessControl.PropagationFlags]::None
-    $allow = [System.Security.AccessControl.AccessControlType]::Allow
-
-    $acl = New-Object System.Security.AccessControl.DirectorySecurity
-    $acl.SetOwner($admins)
-    $acl.SetAccessRuleProtection($true, $false)
-    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($system, "FullControl", $inherit, $none, $allow)))
-    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($admins, "FullControl", $inherit, $none, $allow)))
-    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($users, "ReadAndExecute", $inherit, $none, $allow)))
-    Set-Acl -LiteralPath $Path -AclObject $acl
-
-    # Everything below drops its own entries and inherits the above.
-    Invoke-NativeCommand -FilePath "icacls.exe" -ArgumentList @((Join-Path $Path "*"), "/setowner", "*S-1-5-32-544", "/T", "/C", "/Q") | Out-Null
-    Invoke-NativeCommand -FilePath "icacls.exe" -ArgumentList @((Join-Path $Path "*"), "/reset", "/T", "/C", "/Q") | Out-Null
-}
+# Junction checks, ACLs, safe deletes. An elevated New-Item leaves the installing user as owner and, through CREATOR
+# OWNER, with FullControl, so unelevated code could replace what the SYSTEM service loads: Set-AdminOnlyAcl fixes that.
+. (Join-Path $PSScriptRoot "acl.ps1")
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $InstallDir = "C:\Program Files\PcHwCtl"
@@ -67,8 +45,18 @@ $SourceConfigFile = Join-Path $RepoRoot "config\pchwctl.json"
 $TargetConfigFile = Join-Path $DataDir "pchwctl.json"
 $LogFile = Join-Path $DataDir "log.txt"
 
-# 1. Unless -SkipPublish, run publish.ps1
+# 0. This script, the sources and publish\ become SYSTEM's code: nobody but admins and you may be able to change them.
+$me = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+$sourceWriters = foreach ($dir in @($RepoRoot, $PSScriptRoot, (Join-Path $RepoRoot "src"), (Join-Path $RepoRoot "config"), (Join-Path $RepoRoot "models"), (Join-Path $RepoRoot "publish"))) {
+    if (Test-Path -LiteralPath $dir) { Get-NonAdminWriters -Path $dir -AlsoAllowed @($me) | ForEach-Object { "$dir`: $_" } }
+}
+if (@($sourceWriters).Count -gt 0) {
+    throw "Refusing to install: other accounts can change what this installs as SYSTEM:`n  $($sourceWriters -join "`n  ")`nRemove their write access (see docs/install.md) and run again."
+}
+
+# 1. Unless -SkipPublish, run publish.ps1 into an empty publish\ (nothing left over from before is deployed)
 if (-not $SkipPublish) {
+    Remove-TreeSafely -Path (Join-Path $RepoRoot "publish")
     $publishScript = Join-Path $PSScriptRoot "publish.ps1"
     Write-Host "Running publish script: $publishScript"
     & $publishScript
@@ -98,25 +86,38 @@ Get-Process -Name "pchwctl" -ErrorAction SilentlyContinue |
         $_.WaitForExit(5000) | Out-Null
     }
 
-# 3. Copy publish\* to C:\Program Files\PcHwCtl\ (create, overwrite)
+# 3. Replace C:\Program Files\PcHwCtl\ with publish\*: emptied first, so a DLL someone planted there doesn't survive
 $publishDir = Join-Path $RepoRoot "publish"
 if (-not (Test-Path -LiteralPath $publishDir)) {
     throw "Publish directory does not exist: $publishDir. Run publish.ps1 or omit -SkipPublish."
 }
 
-if (-not (Test-Path -LiteralPath $InstallDir)) {
+if (Test-Path -LiteralPath $InstallDir) {
+    Assert-NoReparsePoints -Path $InstallDir
+    Write-Host "Emptying install directory: $InstallDir"
+    Get-ChildItem -LiteralPath $InstallDir -Force | ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force }
+} else {
     Write-Host "Creating install directory: $InstallDir"
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 }
+Set-AdminOnlyAcl -Path $InstallDir -UsersRead
 
 Write-Host "Copying files from $publishDir to $InstallDir..."
 Copy-Item -Path (Join-Path $publishDir "*") -Destination $InstallDir -Recurse -Force
 
-# 4. Config: copy config\pchwctl.json to C:\ProgramData\PcHwCtl\pchwctl.json
-if (-not (Test-Path -LiteralPath $DataDir)) {
+# 4. Data directory: secured before anything is written to it. Files a non-admin owns could be planted (a config
+# pointing SYSTEM at a DLL, a lasso profile), so they stop the install until someone has looked at them.
+if (Test-Path -LiteralPath $DataDir) {
+    Assert-NoReparsePoints -Path $DataDir
+    $foreign = @(Get-ForeignOwned -Path $DataDir)
+    if ($foreign.Count -gt 0 -and -not $TrustExistingData) {
+        throw "Refusing to adopt $DataDir`: these are owned by a non-admin account and could have been planted:`n  $($foreign -join "`n  ")`nCheck them (delete what you don't recognise), then run again with -TrustExistingData."
+    }
+} else {
     Write-Host "Creating data directory: $DataDir"
     New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
 }
+Set-AdminOnlyAcl -Path $DataDir
 
 $targetConfigExists = Test-Path -LiteralPath $TargetConfigFile
 if (-not $targetConfigExists -or $ForceConfig) {
@@ -132,9 +133,9 @@ if (-not $targetConfigExists -or $ForceConfig) {
     Write-Host "Config file already exists at $TargetConfigFile (use -ForceConfig to overwrite)."
 }
 
-Write-Host "Restricting $InstallDir and $DataDir to SYSTEM and Administrators (Users can read)..."
-Set-AdminOnlyAcl -Path $InstallDir
-Set-AdminOnlyAcl -Path $DataDir
+Write-Host "Restricting $InstallDir and $DataDir to SYSTEM and Administrators (Users read the install and pchwctl.json)..."
+Set-AdminOnlyAcl -Path $InstallDir -UsersRead
+Set-AdminOnlyAcl -Path $DataDir -UsersReadFiles @("pchwctl.json")
 
 # 5. Service configuration: create or update
 $svc = Get-Service -Name "PcHwCtl" -ErrorAction SilentlyContinue

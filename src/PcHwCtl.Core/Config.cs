@@ -355,6 +355,17 @@ public static class ConfigLoader
             errors.Add($"Vpn settleS {config.Vpn.SettleS} must be 1-60.");
         }
 
+        // ENE sticks sit at 0x70-0x77. Anything else could be an SPD hub: on DDR4/DDR5 a quick write to 0x30-0x37 sets
+        // SPD write protection, which can be permanent.
+        foreach (string a in config.Devices.Ene?.Addresses ?? [])
+        {
+            string t = a.Trim();
+            bool hex = t.StartsWith("0x", StringComparison.OrdinalIgnoreCase);   // as EneDramDevice.ParseAddress: else decimal
+            if (!int.TryParse(hex ? t[2..] : t, hex ? System.Globalization.NumberStyles.HexNumber : System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out int addr) || addr is < 0x70 or > 0x77)
+                errors.Add($"Devices ene address '{a}' must be 0x70-0x77.");
+        }
+
         var presence = config.Presence;
         if (presence.MinConf is <= 0 or > 1) errors.Add($"Presence minConf {presence.MinConf} must be above 0 and at most 1.");
         if (presence.DarkLuma is < 0 or > 255) errors.Add($"Presence darkLuma {presence.DarkLuma} must be 0-255.");

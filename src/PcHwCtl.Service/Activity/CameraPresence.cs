@@ -26,7 +26,10 @@ public sealed unsafe class CameraPresence : IPresence, IDisposable
     {
         _config = config;
         _log = log;
-        _cacheDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PcHwCtl", "ovcache");
+        // OpenVINO loads compiled blobs from the cache: an elevated console must not read one that unelevated code wrote.
+        bool elevated = new System.Security.Principal.WindowsPrincipal(System.Security.Principal.WindowsIdentity.GetCurrent())
+            .IsInRole(System.Security.Principal.WindowsBuiltInRole.Administrator);
+        _cacheDir = Path.Combine(Environment.GetFolderPath(elevated ? Environment.SpecialFolder.CommonApplicationData : Environment.SpecialFolder.LocalApplicationData), "PcHwCtl", "ovcache");
     }
 
     public static string DefaultModel => Path.Combine(AppContext.BaseDirectory, "models", "yolo26x-fp16-ov", "yolo26x.xml");
@@ -101,6 +104,23 @@ public sealed unsafe class CameraPresence : IPresence, IDisposable
         }
     }
 
+    /// <summary>
+    /// The shipped model is the one the repo pins (models/**/*.xml is -text in git, so its bytes match on every
+    /// checkout). OpenVINO parses both files natively, so a swapped file is refused before it is read.
+    /// </summary>
+    private static void CheckShipped(string xml)
+    {
+        foreach (var (file, sha) in new[] { (xml, ShippedXmlSha256), (Path.ChangeExtension(xml, ".bin"), ShippedBinSha256) })
+        {
+            using var stream = File.OpenRead(file);
+            string actual = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(stream));
+            if (actual != sha) throw new InvalidOperationException($"{Path.GetFileName(file)} is not the shipped model (SHA-256 {actual[..12]}...)");
+        }
+    }
+
+    private const string ShippedXmlSha256 = "3603de4e62c464a83d579cee72cf64a454eed86b8080819c930b7c2fa236c797";
+    private const string ShippedBinSha256 = "4cb93aa68fe28a8b9ba92ddde57a827a831ec6dfdf99ec261ad3a0a71da31250";
+
     /// <summary>Zeroes the pixels before OpenCV frees them, so this copy is not left in freed memory.</summary>
     private static void Wipe(Mat? mat)
     {
@@ -117,6 +137,7 @@ public sealed unsafe class CameraPresence : IPresence, IDisposable
         _model?.Dispose();
         _model = null;
         var sw = Stopwatch.StartNew();
+        if (path == DefaultModel) CheckShipped(path);
         _model = YoloModel.Load(path, cfg.Device, _cacheDir, _log);
         _modelKey = (path, cfg.Device);
         _log($"Presence: YOLO ready on {_model.Device} in {sw.ElapsedMilliseconds} ms.");

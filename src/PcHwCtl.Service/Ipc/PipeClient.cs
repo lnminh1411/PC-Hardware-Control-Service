@@ -53,6 +53,15 @@ public static class PipeClient
                 return 2;
             }
 
+            // The name proves nothing: anyone can hold it while the service is down. Only a session-0 pchwctl (the
+            // service) gets the command, which may carry a webhook.
+            string? notService = NotTheService(client);
+            if (notService != null)
+            {
+                await output.WriteLineAsync($"Refusing to send: pipe '{pipeName}' is held by {notService}, not the PcHwCtl service.");
+                return 2;
+            }
+
             var writer = new StreamWriter(client, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), bufferSize: 1024, leaveOpen: true)
             {
                 NewLine = "\n"
@@ -112,4 +121,23 @@ public static class PipeClient
             client?.Dispose();
         }
     }
+
+    /// <summary>Null when the server is a pchwctl process in session 0 (only a service runs there), else what it is.</summary>
+    private static string? NotTheService(NamedPipeClientStream client)
+    {
+        if (!GetNamedPipeServerProcessId(client.SafePipeHandle, out uint pid)) return "an unknown process";
+        try
+        {
+            using var server = System.Diagnostics.Process.GetProcessById((int)pid);
+            bool service = server.SessionId == 0 && server.ProcessName.Equals("pchwctl", StringComparison.OrdinalIgnoreCase);
+            return service ? null : $"pid {pid} ({server.ProcessName}, session {server.SessionId})";
+        }
+        catch (ArgumentException)
+        {
+            return $"pid {pid} (exited)";
+        }
+    }
+
+    [System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetNamedPipeServerProcessId(Microsoft.Win32.SafeHandles.SafePipeHandle pipe, out uint processId);
 }

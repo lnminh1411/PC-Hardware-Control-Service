@@ -39,6 +39,8 @@ public sealed class PawnIoSmbus : ISmbus
     private readonly PawnIoExecuteDelegate _pawnIoExecute;
     private readonly PawnIoCloseDelegate _pawnIoClose;
     private readonly Mutex _mutex;
+    private long _nextMutexLogMs;
+    private int _mutexTimeouts;
     private readonly Action<string> _log;
     private bool _disposed;
 
@@ -80,7 +82,15 @@ public sealed class PawnIoSmbus : ISmbus
                 return null;
             }
 
-            dllHandle = NativeLibrary.Load(cfg.PawnIoLibPath);
+            string programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles) + Path.DirectorySeparatorChar;
+            string full = Path.GetFullPath(cfg.PawnIoLibPath);
+            if (!full.StartsWith(programFiles, StringComparison.OrdinalIgnoreCase) || new FileInfo(full).LinkTarget != null)
+            {
+                log($"PawnIO library '{cfg.PawnIoLibPath}' refused: SYSTEM only loads it from under {programFiles}.");
+                return null;
+            }
+
+            dllHandle = NativeLibrary.Load(full);
 
             nint pOpen = NativeLibrary.GetExport(dllHandle, "pawnio_open");
             nint pLoad = NativeLibrary.GetExport(dllHandle, "pawnio_load");
@@ -222,7 +232,14 @@ public sealed class PawnIoSmbus : ISmbus
 
             if (!acquired)
             {
-                _log("PawnIO SMBus: timed out waiting for SMBus mutex (1s).");
+                // Any process can hold this shared mutex; one line a minute is enough to say so.
+                if (Environment.TickCount64 >= _nextMutexLogMs)
+                {
+                    _log($"PawnIO SMBus: timed out waiting for SMBus mutex (1s){(_mutexTimeouts > 0 ? $", {_mutexTimeouts} more since the last report" : "")}.");
+                    _nextMutexLogMs = Environment.TickCount64 + 60_000;
+                    _mutexTimeouts = 0;
+                }
+                else _mutexTimeouts++;
                 return false;
             }
 

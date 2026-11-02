@@ -15,6 +15,7 @@ public sealed class EngineHost : IDisposable
     private readonly PipeServer? _pipe;
     private readonly StateFileWriter? _stateFile;
     private readonly FileLogger _logger;
+    private string? _stateError;
     private readonly bool _consoleOutput;
     private readonly Action? _afterReload;
     private readonly bool _refreshHardware;
@@ -191,7 +192,16 @@ public sealed class EngineHost : IDisposable
                 _tickStep = "state file";
                 steps.Restart();
                 float? mix = _engine.TryReadSource("mix", out float mixValue) ? mixValue : null;
-                _stateFile.Write(_engine, _rgb, mix);
+                try
+                {
+                    _stateFile.Write(_engine, _rgb, mix);
+                }
+                catch (Exception ex)
+                {
+                    // Its inputs come partly from the user-session agent; fans matter more than the file.
+                    if (_stateError != ex.Message) _logger.Log($"State file not written: {ex.Message}");
+                    _stateError = ex.Message;
+                }
                 stateMs = steps.ElapsedMilliseconds;
             }
             _tickStep = "idle";

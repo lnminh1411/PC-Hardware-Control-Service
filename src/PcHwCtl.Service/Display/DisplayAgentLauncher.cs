@@ -7,7 +7,8 @@ namespace PcHwCtl.Service.Display;
 /// <summary>
 /// Keeps one display agent running in the active console session: starts it with the logged-on user's token
 /// (CreateProcessAsUser, which needs the service's LocalSystem rights), again after a crash or a new logon,
-/// and kills it on shutdown. Checks every 10 s.
+/// and kills it on shutdown. Checks every 10 s. Each launch gets a new random pipe name, and the client is bound to
+/// that name and the new pid, so an agent someone else started (any account can run the installed exe) is never used.
 /// </summary>
 public sealed class DisplayAgentLauncher : IDisposable
 {
@@ -94,9 +95,8 @@ public sealed class DisplayAgentLauncher : IDisposable
 
         bool ours = _agent is { HasExited: false } && _agentSession == session;
         if (ours) return;
-        if (_agent is { HasExited: false }) StopAgent("console session changed");
-        if (_client.AgentAnswers()) return; // one already running (e.g. left by a service restart; it exits with its parent)
-
+        StopAgent(_agent is { HasExited: false } ? "console session changed" : "exited");
+        // An agent left by an earlier service run serves an old pipe name and exits once its parent is gone.
         Launch(session);
     }
 
@@ -117,7 +117,8 @@ public sealed class DisplayAgentLauncher : IDisposable
             CreateEnvironmentBlock(out environment, primary, false);
 
             var startup = new STARTUPINFO { cb = Marshal.SizeOf<STARTUPINFO>(), lpDesktop = @"winsta0\default" };
-            var commandLine = new StringBuilder($"\"{_exePath}\" display-agent --config \"{_configPath}\" --parent {Environment.ProcessId}");
+            string pipe = $"{DisplayAgent.PipeName}-{Guid.NewGuid():N}";
+            var commandLine = new StringBuilder($"\"{_exePath}\" display-agent --config \"{_configPath}\" --parent {Environment.ProcessId} --pipe {pipe}");
             if (!CreateProcessAsUser(primary, _exePath, commandLine, IntPtr.Zero, IntPtr.Zero, false,
                     CREATE_UNICODE_ENVIRONMENT | CREATE_NO_WINDOW, environment, Path.GetDirectoryName(_exePath), ref startup, out var info))
             {
@@ -128,6 +129,7 @@ public sealed class DisplayAgentLauncher : IDisposable
             CloseHandle(info.hProcess);
             _agent = Process.GetProcessById(info.dwProcessId);
             _agentSession = session;
+            _client.Bind(pipe, info.dwProcessId);
             _lastError = null;
             _log($"Display agent started in session {session} (pid {info.dwProcessId}).");
         }
@@ -142,6 +144,7 @@ public sealed class DisplayAgentLauncher : IDisposable
     private void StopAgent(string why)
     {
         if (_agent == null) return;
+        _client.Bind(null, 0);
         try
         {
             if (!_agent.HasExited)

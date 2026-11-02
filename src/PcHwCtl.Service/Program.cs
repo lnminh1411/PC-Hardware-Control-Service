@@ -50,17 +50,24 @@ public static class Program
             return 0;
         }
 
-        // pchwctl display-agent [--config <path>] [--parent <pid>]: user-session monitor control (no admin needed).
+        // pchwctl display-agent [--config <path>] [--parent <pid>] [--pipe <name>]: user-session monitor control (no admin needed).
         if (args.Length > 0 && string.Equals(args[0], "display-agent", StringComparison.OrdinalIgnoreCase))
         {
             string agentConfig = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "PcHwCtl", "pchwctl.json");
             int? parent = null;
+            string pipeName = DisplayAgent.PipeName;
             for (int i = 1; i + 1 < args.Length; i++)
             {
                 if (string.Equals(args[i], "--config", StringComparison.OrdinalIgnoreCase)) agentConfig = args[++i];
                 else if (string.Equals(args[i], "--parent", StringComparison.OrdinalIgnoreCase) && int.TryParse(args[++i], out int pid)) parent = pid;
+                else if (string.Equals(args[i], "--pipe", StringComparison.OrdinalIgnoreCase)) pipeName = args[++i];
             }
-            return await DisplayAgent.RunAsync(agentConfig, parent);
+            if (!System.Text.RegularExpressions.Regex.IsMatch(pipeName, @"\APcHwCtl-display(-[0-9a-f]{32})?\z"))
+            {
+                Console.Error.WriteLine($"Bad pipe name '{pipeName}'.");
+                return 2;
+            }
+            return await DisplayAgent.RunAsync(agentConfig, parent, pipeName);
         }
 
         for (int i = 0; i < args.Length; i++)
@@ -208,6 +215,7 @@ public static class Program
 
         // Zero RPM toggles and brightness set over IPC outlive restarts; a dry run reads them but never saves.
         string dataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "PcHwCtl");
+        if (!isConsole) InstallAclCheck.Warn(dataDir, msg => logger.Log(msg));
         var persisted = new PersistedSettings(Path.Combine(dataDir, "settings.json"), msg => logger.Log(msg), save: !isDryRun);
         persisted.Apply(engine, rgb);
 
@@ -220,9 +228,11 @@ public static class Program
         var displayCts = new CancellationTokenSource();
         // Presence (webcam) and screenshots need the user's session too, so they ride on the same agent.
         IPresence? presence = null;
-        IScreenshot? screenshot = null;
+        ScreenUploader? screenshot = null;
         ScreenShooter? localShooter = null;
         CameraPresence? localPresence = null;
+        // The service posts screenshots and keeps their deletes: the webhook never enters the user's session.
+        string shotDeletes = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "PcHwCtl", "shot-deletes.txt");
         if ((config.Displays.Enabled || config.Presence.Enabled || config.Screenshot.Enabled) && !isDryRun)
         {
             if (System.Diagnostics.Process.GetCurrentProcess().SessionId == 0)
@@ -234,24 +244,26 @@ public static class Program
                 if (config.Displays.Enabled) displays = displayClient;
                 var features = new AgentFeatures(displayClient);
                 if (config.Presence.Enabled) presence = features;
-                if (config.Screenshot.Enabled) screenshot = features;
+                if (config.Screenshot.Enabled) screenshot = new ScreenUploader(() => config.Screenshot, features.Capture, shotDeletes, msg => logger.Log(msg));
             }
             else
             {
+                DisplayController? controller = null;
                 if (config.Displays.Enabled)
                 {
-                    var controller = new DisplayController(new DdcDisplayBus(), () => config.Displays, SystemClock.Instance);
+                    controller = new DisplayController(new DdcDisplayBus(), () => config.Displays, SystemClock.Instance);
                     new DisplayPoller(controller, () => config.Displays.PollS, msg => logger.Log(msg)).Start(displayCts.Token);
                     displays = controller;
                 }
                 if (config.Presence.Enabled) presence = localPresence = new CameraPresence(() => config.Presence, msg => logger.Log(msg));
                 if (config.Screenshot.Enabled)
                 {
-                    screenshot = localShooter = new ScreenShooter(() => config.Screenshot, msg => logger.Log(msg));
-                    localShooter.Start();
+                    localShooter = new ScreenShooter(() => config.Screenshot, () => controller?.Displays ?? [], msg => logger.Log(msg));
+                    screenshot = new ScreenUploader(() => config.Screenshot, localShooter.Capture, shotDeletes, msg => logger.Log(msg));
                 }
             }
         }
+        screenshot?.Start();
 
         // Process Lasso control needs SYSTEM (prolasso.ini, other users' affinity), so it lives here, not in the display agent.
         LassoControl? lasso = null;
@@ -327,6 +339,7 @@ public static class Program
             displayLauncher?.Dispose();
             displayClient?.Dispose();
             localPresence?.Dispose();
+            screenshot?.Dispose();
             localShooter?.Dispose();
             lasso?.Dispose();
         };

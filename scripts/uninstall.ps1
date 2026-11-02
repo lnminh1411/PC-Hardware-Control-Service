@@ -30,6 +30,9 @@ function Invoke-NativeCommand {
     return $proc.ExitCode
 }
 
+# Junction-safe deletes (an elevated Remove-Item -Recurse could follow one out of the tree).
+. (Join-Path $PSScriptRoot "acl.ps1")
+
 $InstallDir = "C:\Program Files\PcHwCtl"
 $DataDir = "C:\ProgramData\PcHwCtl"
 
@@ -53,14 +56,14 @@ if ($svc) {
 # 2. Remove C:\Program Files\PcHwCtl
 if (Test-Path -LiteralPath $InstallDir) {
     Write-Host "Removing installation directory: $InstallDir"
-    Remove-Item -LiteralPath $InstallDir -Recurse -Force
+    Remove-TreeSafely -Path $InstallDir
 }
 
 # 3. Handle data directory: keep C:\ProgramData\PcHwCtl unless -RemoveData
 if ($RemoveData) {
     if (Test-Path -LiteralPath $DataDir) {
         Write-Host "Removing data directory: $DataDir (-RemoveData specified)"
-        Remove-Item -LiteralPath $DataDir -Recurse -Force
+        Remove-TreeSafely -Path $DataDir
     }
 } else {
     Write-Host "Retaining data directory at $DataDir (use -RemoveData to delete)."

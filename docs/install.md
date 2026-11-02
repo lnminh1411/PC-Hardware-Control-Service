@@ -31,6 +31,7 @@ Run `scripts/install.ps1` from an elevated PowerShell terminal:
 | Switch | Description |
 |---|---|
 | `-SkipPublish` | Skip compiling and publishing binaries; use existing files in `publish\`. |
+| `-TrustExistingData` | Keep files in `C:\ProgramData\PcHwCtl\` that a non-admin account owns (an older install leaves them owned by you). Without it the install stops and lists them, because a planted config or lasso profile would run as SYSTEM. Check the list first. |
 | `-ForceConfig` | Overwrite existing `C:\ProgramData\PcHwCtl\pchwctl.json` with repository template, backing up existing file to `pchwctl.json.bak-<yyyyMMdd-HHmmss>`. |
 | `-DisableFanControl` | Stop running `FanControl.exe` processes and disable autostart mechanisms (scheduled tasks, registry Run entries, and startup folder shortcuts). Disabled registry entries and shortcuts are renamed with suffix `.disabled-by-pchwctl`. |
 | `-DisableOpenRGB` | Stop running `OpenRGB.exe` processes, disable scheduled tasks, rename registry Run entries and startup shortcuts with suffix `.disabled-by-pchwctl`, and stop any Windows service targeting `OpenRGB.exe` while setting its startup type to Disabled. |
@@ -41,7 +42,15 @@ Run `scripts/install.ps1` from an elevated PowerShell terminal:
 2. Stops the `PcHwCtl` service if already running (waiting up to 15 seconds).
 3. Copies published binaries to `C:\Program Files\PcHwCtl\`.
 4. Copies configuration template to `C:\ProgramData\PcHwCtl\pchwctl.json` if missing or if `-ForceConfig` is passed.
-5. Restricts `C:\Program Files\PcHwCtl\` and `C:\ProgramData\PcHwCtl\`: owner Administrators, full control for SYSTEM and Administrators, read for Users.
+5. Restricts `C:\Program Files\PcHwCtl\` and `C:\ProgramData\PcHwCtl\`: owner Administrators, full control for SYSTEM and Administrators. Users can read the install directory (the display agent runs from it) but only `pchwctl.json` in the data directory (the agent reads it); the logs, state file and screenshot deletes stay private.
+
+Safety checks, each of which stops the install:
+
+- **Source tree:** the repository, `scripts\`, `src\`, `config\`, `models\` and `publish\` must not be writable by any account other than SYSTEM, Administrators and you, because the install builds and deploys them as SYSTEM's code. A non-system drive gives Authenticated Users Modify by default; remove it with `icacls "<repo>" /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "%USERNAME%:(OI)(CI)F" "*S-1-5-32-545:(OI)(CI)RX"`.
+- **Junctions:** neither directory may contain a junction or symlink, which the elevated permission reset and deletes would follow.
+- **Planted data:** see `-TrustExistingData`.
+
+The install empties `publish\` before building and `C:\Program Files\PcHwCtl\` before copying, so nothing from an earlier install or build survives. The service logs a `SECURITY WARNING` at start if either directory, the exe, the dll or the config is writable by a non-admin.
 6. Creates or reconfigures the `PcHwCtl` service with auto-start and failure recovery (restart after 5s, 5s, 30s).
 7. Handles `-DisableFanControl` and `-DisableOpenRGB` disabling logic if requested.
 8. Starts the service, verifies Running status within 15 seconds, and displays service status alongside the tail of `log.txt`.

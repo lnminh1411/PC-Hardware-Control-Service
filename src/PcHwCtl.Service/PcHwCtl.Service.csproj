@@ -8,6 +8,9 @@
     <UseWindowsForms>true</UseWindowsForms>
     <!-- presence reads camera frames and fills the model input in place, without managed copies to wipe -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- DOTNET_STARTUP_HOOKS would run anyone's code inside the installed exe -->
+    <StartupHookSupport>false</StartupHookSupport>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
 
   <ItemGroup>
@@ -27,8 +30,8 @@
 
   <ItemGroup>
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.6" />
-    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.*" />
-    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.*" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.14" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="10.0.14" />
     <!-- presence: camera frames (DirectShow, like npu-bench's cv2) and YOLO26x on the NPU through OpenVINO's C API -->
     <PackageReference Include="OpenCvSharp4" Version="4.13.0.20260627" />
     <PackageReference Include="OpenCvSharp4.runtime.win" Version="4.13.0.20260627" />

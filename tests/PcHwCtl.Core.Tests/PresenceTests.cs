@@ -201,4 +201,15 @@ public class PresenceTests
         ex = Assert.Throws<ConfigException>(() => ConfigLoader.Validate(new Config { Presence = new PresenceConfig { MinIntervalS = -1 } }));
         Assert.Contains("minIntervalS", ex.Message);
     }
+
+    [Fact]
+    public void Test07_EneAddressesStayOffSpd()
+    {
+        ConfigLoader.Validate(new Config { Devices = new DevicesConfig { Ene = new EneConfig { Addresses = ["0x71", "0x73", "119"] } } });   // 119 = 0x77
+        foreach (string bad in new[] { "0x30", "0x37", "0x50", "0x6F", "0x78", "112x", "48" })
+        {
+            var ex = Assert.Throws<ConfigException>(() => ConfigLoader.Validate(new Config { Devices = new DevicesConfig { Ene = new EneConfig { Addresses = [bad] } } }));
+            Assert.Contains("0x70-0x77", ex.Message);
+        }
+    }
 }

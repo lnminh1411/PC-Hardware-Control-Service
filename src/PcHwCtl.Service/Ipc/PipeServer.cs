@@ -296,6 +296,9 @@ public sealed class PipeServer : IDisposable
     {
         var security = new PipeSecurity();
 
+        // Local only: a network logon (an admin over SMB included) is refused before any allow below.
+        security.AddAccessRule(new PipeAccessRule(new SecurityIdentifier(WellKnownSidType.NetworkSid, null), PipeAccessRights.FullControl, AccessControlType.Deny));
+
         // SYSTEM and Administrators get FullControl: creating the 2nd..4th pipe instance needs
         // CreateNewInstance, and the server runs as one of them. Clients only need ReadWrite.
         var sidSystem = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
