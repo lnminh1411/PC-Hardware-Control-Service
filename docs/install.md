@@ -41,9 +41,10 @@ Run `scripts/install.ps1` from an elevated PowerShell terminal:
 2. Stops the `PcHwCtl` service if already running (waiting up to 15 seconds).
 3. Copies published binaries to `C:\Program Files\PcHwCtl\`.
 4. Copies configuration template to `C:\ProgramData\PcHwCtl\pchwctl.json` if missing or if `-ForceConfig` is passed.
-5. Creates or reconfigures the `PcHwCtl` service with auto-start and failure recovery (restart after 5s, 5s, 30s).
-6. Handles `-DisableFanControl` and `-DisableOpenRGB` disabling logic if requested.
-7. Starts the service, verifies Running status within 15 seconds, and displays service status alongside the tail of `log.txt`.
+5. Restricts `C:\Program Files\PcHwCtl\` and `C:\ProgramData\PcHwCtl\`: owner Administrators, full control for SYSTEM and Administrators, read for Users.
+6. Creates or reconfigures the `PcHwCtl` service with auto-start and failure recovery (restart after 5s, 5s, 30s).
+7. Handles `-DisableFanControl` and `-DisableOpenRGB` disabling logic if requested.
+8. Starts the service, verifies Running status within 15 seconds, and displays service status alongside the tail of `log.txt`.
 
 ## Uninstalling the service
 
@@ -73,6 +74,8 @@ Run `scripts/uninstall.ps1` from an elevated PowerShell terminal:
 
 - **Configuration path**: `C:\ProgramData\PcHwCtl\pchwctl.json`
 - **Log path**: `C:\ProgramData\PcHwCtl\log.txt`
+
+Editing `pchwctl.json` needs an elevated editor. `presence` and `screenshot` are off unless the config enables them, and screenshots also need the webhook's id in `screenshot.webhookIds`.
 
 The service monitors `pchwctl.json` and hot-reloads valid changes automatically. If a newly edited configuration is invalid, the service logs the error and continues running using the last good configuration.
 

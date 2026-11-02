@@ -31,6 +31,34 @@ function Invoke-NativeCommand {
     return $proc.ExitCode
 }
 
+# An elevated New-Item leaves the installing user as owner and, through CREATOR OWNER, with FullControl, so unelevated
+# code could replace what the SYSTEM service loads. SYSTEM and Administrators only; Users can read (the agent needs to).
+function Set-AdminOnlyAcl {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    $admins = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-544")
+    $system = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-18")
+    $users = New-Object System.Security.Principal.SecurityIdentifier("S-1-5-32-545")
+    $inherit = [System.Security.AccessControl.InheritanceFlags]"ContainerInherit, ObjectInherit"
+    $none = [System.Security.AccessControl.PropagationFlags]::None
+    $allow = [System.Security.AccessControl.AccessControlType]::Allow
+
+    $acl = New-Object System.Security.AccessControl.DirectorySecurity
+    $acl.SetOwner($admins)
+    $acl.SetAccessRuleProtection($true, $false)
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($system, "FullControl", $inherit, $none, $allow)))
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($admins, "FullControl", $inherit, $none, $allow)))
+    $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule($users, "ReadAndExecute", $inherit, $none, $allow)))
+    Set-Acl -LiteralPath $Path -AclObject $acl
+
+    # Everything below drops its own entries and inherits the above.
+    Invoke-NativeCommand -FilePath "icacls.exe" -ArgumentList @((Join-Path $Path "*"), "/setowner", "*S-1-5-32-544", "/T", "/C", "/Q") | Out-Null
+    Invoke-NativeCommand -FilePath "icacls.exe" -ArgumentList @((Join-Path $Path "*"), "/reset", "/T", "/C", "/Q") | Out-Null
+}
+
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $InstallDir = "C:\Program Files\PcHwCtl"
 $DataDir = "C:\ProgramData\PcHwCtl"
@@ -103,6 +131,10 @@ if (-not $targetConfigExists -or $ForceConfig) {
 } else {
     Write-Host "Config file already exists at $TargetConfigFile (use -ForceConfig to overwrite)."
 }
+
+Write-Host "Restricting $InstallDir and $DataDir to SYSTEM and Administrators (Users can read)..."
+Set-AdminOnlyAcl -Path $InstallDir
+Set-AdminOnlyAcl -Path $DataDir
 
 # 5. Service configuration: create or update
 $svc = Get-Service -Name "PcHwCtl" -ErrorAction SilentlyContinue

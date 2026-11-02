@@ -95,6 +95,7 @@ public sealed class PipeServer : IDisposable
     private async Task ListenLoopAsync(CancellationToken ct)
     {
         string pipeName = GetCleanPipeName();
+        bool first = true;   // FirstPipeInstance: never join a name something else got to before the service
 
         while (!ct.IsCancellationRequested)
         {
@@ -116,10 +117,11 @@ public sealed class PipeServer : IDisposable
                     PipeDirection.InOut,
                     MaxClients,
                     PipeTransmissionMode.Byte,
-                    PipeOptions.Asynchronous,
+                    PipeOptions.Asynchronous | (first ? PipeOptions.FirstPipeInstance : PipeOptions.None),
                     0,
                     0,
                     security);
+                first = false;
             }
             catch (Exception ex)
             {

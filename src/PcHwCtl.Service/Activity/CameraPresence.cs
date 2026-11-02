@@ -7,7 +7,8 @@ namespace PcHwCtl.Service.Activity;
 /// <summary>
 /// One presence check: open the webcam (DirectShow, as npu-bench's cv2 did), drop SettleFrames while exposure
 /// settles, keep one frame, close the camera, run YOLO26x, then zero the frame, its scaled copy and the model input.
-/// Frames live only in this process's memory; nothing is written to disk or returned but the verdict.
+/// Frames live only in this process's memory; nothing is written to disk or returned but the verdict. Buffers inside
+/// the DirectShow backend and the NPU plugin are out of reach and not wiped.
 /// Runs in the user-session agent (session 0 has no camera access), or in the console service.
 /// </summary>
 public sealed unsafe class CameraPresence : IPresence, IDisposable
@@ -18,6 +19,8 @@ public sealed unsafe class CameraPresence : IPresence, IDisposable
     private readonly object _lock = new();
     private YoloModel? _model;
     private string? _lastError;
+    private PresenceResult? _last;
+    private long _nextCheckMs;
 
     public CameraPresence(Func<PresenceConfig> config, Action<string> log)
     {
@@ -35,6 +38,7 @@ public sealed unsafe class CameraPresence : IPresence, IDisposable
             var sw = Stopwatch.StartNew();
             var cfg = _config();
             if (!cfg.Enabled) return PresenceResult.Unknown("off");
+            if (_last != null && Environment.TickCount64 < _nextCheckMs) return _last;   // no client keeps the camera on
             try
             {
                 var model = Model(cfg);
@@ -42,6 +46,8 @@ public sealed unsafe class CameraPresence : IPresence, IDisposable
                 var r = Run(cfg, model, sw);
                 if (_lastError != null) _log("Presence: checks work again.");
                 _lastError = null;
+                _last = r;
+                _nextCheckMs = Environment.TickCount64 + cfg.MinIntervalS * 1000L;
                 return r;
             }
             catch (Exception ex)
@@ -95,7 +101,7 @@ public sealed unsafe class CameraPresence : IPresence, IDisposable
         }
     }
 
-    /// <summary>Zeroes the pixels before OpenCV frees them, so no frame is left in freed memory.</summary>
+    /// <summary>Zeroes the pixels before OpenCV frees them, so this copy is not left in freed memory.</summary>
     private static void Wipe(Mat? mat)
     {
         if (mat == null || mat.IsDisposed) return;

@@ -1,4 +1,5 @@
 using System.IO.Pipes;
+using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 
@@ -28,7 +29,7 @@ public static class PipeClient
         NamedPipeClientStream? client = null;
         try
         {
-            client = new NamedPipeClientStream(".", cleanPipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+            client = new NamedPipeClientStream(".", cleanPipeName, PipeDirection.InOut, PipeOptions.Asynchronous, TokenImpersonationLevel.Anonymous);
 
             try
             {

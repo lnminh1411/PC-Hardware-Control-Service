@@ -256,7 +256,7 @@
     "pipeName": "PcHwCtl",
     "overrideTtlS": 60,
     "maxTtlS": 3600,
-    "allowAccount": "NT AUTHORITY\\LocalService"
+    "allowAccount": ""
   },
   "displays": {
     "enabled": true,
@@ -291,12 +291,15 @@
     "camera": 0,
     "minConf": 0.4,
     "darkLuma": 0.5,
-    "settleFrames": 26
+    "settleFrames": 26,
+    "minIntervalS": 10
   },
   "screenshot": {
     "enabled": true,
+    "webhookIds": [],
     "deleteMin": 5,
-    "borderS": 5
+    "borderS": 5,
+    "minIntervalS": 10
   },
   "power": {
     "nightPlan": "PcHwCtl Night",

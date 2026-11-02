@@ -1,6 +1,8 @@
 # PcHwCtl IPC
 
-Named pipe `\\.\pipe\PcHwCtl` (name from config `ipc.pipeName`). Access: SYSTEM, Administrators, and the account in `ipc.allowAccount` (default `NT AUTHORITY\LocalService`; ESP32PcStats runs as LocalSystem, already covered).
+Named pipe `\\.\pipe\PcHwCtl` (name from config `ipc.pipeName`). Access: SYSTEM, Administrators, and the account in `ipc.allowAccount` (default none; ESP32PcStats runs as LocalSystem, already covered). That account can run every command, screenshots and camera checks included, so don't name a shared one such as `NT AUTHORITY\LocalService`.
+
+Pipe names are machine-wide and first come, first served, so a client should connect with `TokenImpersonationLevel.Anonymous` and check who holds the pipe (`GetNamedPipeServerProcessId`) before it sends a webhook.
 
 ## Framing
 
@@ -213,11 +215,13 @@ Config: `"vpn": { "enabled": true, "trace": true, "settleS": 5 }` (settleS 1-60)
 
 ## Presence
 
-`presence` answers "is someone at the PC right now?" with one check, run when the command arrives. There is no timer: the client decides how often to ask (the ESP32 helper asks every minute) and what to do with the answer (intrusion alert).
+`presence` answers "is someone at the PC right now?" with one check, run when the command arrives. It is off unless `presence.enabled` is true. There is no timer: the client decides how often to ask (the ESP32 helper asks every minute) and what to do with the answer (intrusion alert). A good answer stands for `minIntervalS` (default 10), so a looping client can't keep the camera on.
+
+As an intrusion check it has limits: only a nearly black frame reads `unknown`, so a lens cover that lets light through can read `no`, and one frame can't tell a photo from a person. A client should alert on `unknown` too.
 
 **How:** the display agent (the user's session; session 0 has no camera access) opens camera `presence.camera` through DirectShow at 640x480, drops `settleFrames` (default 26, about 1 s) while exposure settles, keeps one frame and closes the camera, so the LED is on for about 1-2 s. YOLO26x (COCO, shipped in `models\yolo26x-fp16-ov`, about 65 ms on the NPU) runs on `presence.device` (default NPU through OpenVINO; CPU when the NPU fails). The answer is the best person score.
 
-**Privacy:** the frame lives only in the agent's memory. It is never written to disk and never sent: the camera frame, its scaled copy and the model's input tensor are zeroed right after inference, before the reply. Only the fields below leave the agent.
+**Privacy:** the frame lives only in the agent's memory. The agent never writes it to a file or sends it: the camera frame, its scaled copy and the model's input tensor are zeroed right after inference, before the reply. Buffers inside OpenCV's DirectShow backend and the NPU plugin are not wiped, and Windows can page any of this memory out. Only the fields below leave the agent, and the agent doesn't log them.
 
 | Field | Meaning |
 |---|---|
@@ -230,27 +234,27 @@ Config: `"vpn": { "enabled": true, "trace": true, "settleS": 5 }` (settleS 1-60)
 
 The first check after the agent starts also compiles the model (cached in `%LOCALAPPDATA%\PcHwCtl\ovcache`, about 5 s the first time).
 
-Config: `"presence": { "enabled": true, "device": "NPU", "model": "", "camera": 0, "minConf": 0.4, "darkLuma": 0.5, "settleFrames": 26 }` (`model` empty = the shipped one). The agent rereads it when the file changes.
+Config: `"presence": { "enabled": true, "device": "NPU", "model": "", "camera": 0, "minConf": 0.4, "darkLuma": 0.5, "settleFrames": 26, "minIntervalS": 10 }` (`enabled` defaults to false; `model` empty = the shipped one). The agent rereads it when the file changes.
 
 ## Screenshot
 
-`screenshot <nonce> <webhook>` (from the ESP32 helper's `S` command) runs in the display agent:
+`screenshot <nonce> <webhook>` (from the ESP32 helper's `S` command) runs in the display agent. It is off unless `screenshot.enabled` is true, and only goes to webhooks listed in `screenshot.webhookIds`:
 
 1. Captures every monitor into one PNG, in memory only.
-2. Shows a red border and "Screenshot Captured" on every monitor for `borderS` seconds. The border comes after the capture, so it is never in the image, and nobody is captured without seeing it.
-3. Posts the PNG to the Discord webhook (`?wait=true`, for the message id), then zeroes it.
-4. Deletes the post `deleteMin` minutes later. Due deletes live in `%LOCALAPPDATA%\PcHwCtl\shot-deletes.txt`, so a restart doesn't lose them.
+2. Shows a red border and "Screenshot Captured" on every monitor for `borderS` seconds (1-60). The border comes after the capture, so it is never in the image. If it can't be shown, the PNG is not posted.
+3. Once the border is up, posts the PNG to the Discord webhook (`?wait=true`, for the message id), then zeroes it. The upload doesn't wait for the border to end.
+4. Deletes the post `deleteMin` minutes later. Due deletes live in `%LOCALAPPDATA%\PcHwCtl\shot-deletes.txt`, so a restart doesn't lose them. No answer, a timeout, HTTP 408, 429 or 5xx are retried with growing gaps for 7 days. Any other refusal, or running out of time, logs that the post is still on Discord.
 
 The reply comes after the capture; the border and the upload run on. `accepted:false` and `why`:
-- `busy`: the last screenshot is still uploading.
-- `webhook`: not an `https://discord.com/api/webhooks/...` URL. Only Discord is accepted, so a pipe client can't send the desktop anywhere else.
+- `busy`: the last screenshot is still uploading, or came less than `minIntervalS` ago (default 10).
+- `webhook`: not a plain `https://discord.com/api/webhooks/<id>/<token>` URL (only `?thread_id=` may follow), or `<id>` isn't in `webhookIds`. Any program can create its own Discord webhook, so this list is what stops a pipe client sending the desktop to itself.
 - `capture`: e.g. the desktop is locked.
 - `agent`: no display agent.
 - `off`: screenshots are off.
 
-The webhook URL is kept out of the logs.
+The webhook URL is kept out of the logs. On disk it is in `shot-deletes.txt`, sealed with DPAPI for the logged-on user. Discord may keep a deleted attachment for a while.
 
-Config: `"screenshot": { "enabled": true, "deleteMin": 5, "borderS": 5 }` (deleteMin 0 = keep the post).
+Config: `"screenshot": { "enabled": true, "webhookIds": ["1234567890"], "deleteMin": 5, "borderS": 5, "minIntervalS": 10 }` (`enabled` defaults to false, `webhookIds` to none; `deleteMin` 0 = keep the post). The id is the number in the webhook URL, not its token.
 
 ## Zero RPM (GPU fans)
 
@@ -268,7 +272,7 @@ State file keys: `hw.<fan>.zr` = 1/0 (Zero RPM on/off), `hw.<fan>.park` = 1 whil
 ## Client sketch (C#, .NET Framework 4 works)
 
 ```csharp
-using (var pipe = new NamedPipeClientStream(".", "PcHwCtl", PipeDirection.InOut))
+using (var pipe = new NamedPipeClientStream(".", "PcHwCtl", PipeDirection.InOut, PipeOptions.None, TokenImpersonationLevel.Anonymous))
 {
     pipe.Connect(1000);
     var w = new StreamWriter(pipe) { AutoFlush = true, NewLine = "\n" };

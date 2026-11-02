@@ -91,9 +91,9 @@ public sealed unsafe class YoloModel : IDisposable
             Check(ov_tensor_get_byte_size(output, out nuint outBytes), "output bytes");
             Check(ov_tensor_data(output, out IntPtr outPtr), "output data");
             int n = checked((int)outCount);
-            return outBytes == outCount * 2
-                ? PresenceLogic.MaxPersonConf(new ReadOnlySpan<Half>((void*)outPtr, n))
-                : PresenceLogic.MaxPersonConf(new ReadOnlySpan<float>((void*)outPtr, n));
+            if (outBytes == outCount * 2) return PresenceLogic.MaxPersonConf(new ReadOnlySpan<Half>((void*)outPtr, n));
+            if (outBytes == outCount * sizeof(float)) return PresenceLogic.MaxPersonConf(new ReadOnlySpan<float>((void*)outPtr, n));
+            throw new InvalidOperationException($"model output is not f16 or f32 ({outBytes} bytes for {outCount} values)");
         }
         finally
         {

@@ -1,14 +1,14 @@
 namespace PcHwCtl.Core.Activity;
 
 /// <summary>
-/// Presence: is someone at the PC right now? One check per `presence` command, never on a timer: the ESP32 helper
-/// decides when to ask and what an answer means (intrusion alert and so on). The user-session agent grabs one webcam
-/// frame, runs YOLO26x person detection on it (NPU through OpenVINO, CPU fallback) and wipes every copy of the frame
-/// before it answers. Only the verdict leaves the agent; no image is stored or sent.
+/// Presence, off unless the config turns it on: is someone at the PC right now? One check per `presence` command, never
+/// on a timer: the ESP32 helper decides when to ask and what an answer means (intrusion alert and so on). The
+/// user-session agent grabs one webcam frame, runs YOLO26x person detection on it (NPU through OpenVINO, CPU fallback)
+/// and wipes its own copies of the frame before it answers. Only the verdict leaves the agent; no image is stored or sent.
 /// </summary>
 public sealed class PresenceConfig
 {
-    public bool Enabled { get; set; } = true;
+    public bool Enabled { get; set; }
 
     /// <summary>OpenVINO device, tried first; CPU when it fails.</summary>
     public string Device { get; set; } = "NPU";
@@ -28,6 +28,9 @@ public sealed class PresenceConfig
 
     /// <summary>Frames read and dropped while the camera's exposure settles (npu-bench used 26, about 1 s).</summary>
     public int SettleFrames { get; set; } = 26;
+
+    /// <summary>Seconds a good answer stands: a sooner `presence` gets it again and the camera stays off.</summary>
+    public int MinIntervalS { get; set; } = 10;
 }
 
 /// <param name="State">yes, no or unknown.</param>

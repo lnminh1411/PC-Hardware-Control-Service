@@ -96,5 +96,7 @@ public sealed class IpcConfig
     public string PipeName { get; set; } = "PcHwCtl";
     public int OverrideTtlS { get; set; } = 60;
     public int MaxTtlS { get; set; } = 3600;
-    public string AllowAccount { get; set; } = @"NT AUTHORITY\LocalService";
+
+    /// <summary>One more account on the pipe besides SYSTEM and Administrators; empty = none. It can run every command.</summary>
+    public string AllowAccount { get; set; } = "";
 }

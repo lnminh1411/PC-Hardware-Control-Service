@@ -89,7 +89,79 @@ public class PresenceTests
         Assert.False(ScreenshotLogic.IsWebhook(null));
         Assert.Equal(Hook + "?wait=true", ScreenshotLogic.PostUrl(Hook));
         Assert.Equal("https://discord.com/api/webhooks/1/x?thread_id=5&wait=true", ScreenshotLogic.PostUrl("https://discord.com/api/webhooks/1/x?thread_id=5"));
-        Assert.Equal(Hook + "/messages/77", ScreenshotLogic.MessageUrl(Hook + "?thread_id=5", "77"));
+        Assert.Equal(Hook + "/messages/77", ScreenshotLogic.MessageUrl(Hook, "77"));
+        Assert.Equal(Hook + "/messages/77?thread_id=5", ScreenshotLogic.MessageUrl(Hook + "?thread_id=5", "77"));   // a thread post needs it
+    }
+
+    [Theory]
+    [InlineData("https://discord.com/api/webhooks/1/x#frag")]      // the fragment would swallow ?wait=true
+    [InlineData("https://discord.com/api/webhooks/1/x#")]
+    [InlineData("https://discord.com/api/webhooks/1/x?wait=false")]
+    [InlineData("https://discord.com/api/webhooks/1/x?thread_id=5&wait=false")]
+    [InlineData("https://user:pw@discord.com/api/webhooks/1/x")]
+    [InlineData("https://discord.com:8443/api/webhooks/1/x")]
+    [InlineData("https://discord.com/api/webhooks/1/x/slack")]
+    [InlineData("https://discord.com/api/webhooks/..%2f..%2fusers")]
+    [InlineData("https://discord.com/api/webhooks/x/y")]
+    [InlineData("https://discord.com/api/webhooks/1")]
+    public void Test07_WebhookIsPlain(string url) => Assert.False(ScreenshotLogic.IsWebhook(url));
+
+    [Fact]
+    public void Test08_OnlyListedWebhooks()
+    {
+        var cfg = new ScreenshotConfig { WebhookIds = ["123"] };
+        Assert.True(ScreenshotLogic.IsAllowed(Hook, cfg));
+        Assert.True(ScreenshotLogic.IsAllowed(Hook + "?thread_id=5", cfg));
+        Assert.False(ScreenshotLogic.IsAllowed("https://discord.com/api/webhooks/999/abc", cfg));   // someone else's
+        Assert.False(ScreenshotLogic.IsAllowed(Hook, new ScreenshotConfig()));
+        Assert.False(ScreenshotLogic.IsAllowed(null, cfg));
+    }
+
+    [Fact]
+    public void Test09_OffByDefault()
+    {
+        var config = new Config();
+        Assert.False(config.Presence.Enabled);
+        Assert.False(config.Screenshot.Enabled);
+        Assert.Empty(config.Screenshot.WebhookIds);
+        Assert.Equal("", config.Ipc.AllowAccount);
+    }
+
+    [Fact]
+    public void Test10_RetryDelete()
+    {
+        Assert.True(ScreenshotLogic.RetryDelete(null));   // no answer
+        Assert.True(ScreenshotLogic.RetryDelete(408));
+        Assert.True(ScreenshotLogic.RetryDelete(429));
+        Assert.True(ScreenshotLogic.RetryDelete(503));
+        Assert.False(ScreenshotLogic.RetryDelete(401));
+        Assert.False(ScreenshotLogic.RetryDelete(403));
+    }
+
+    [Fact]
+    public void Test11_PendingDelete()
+    {
+        var due = new DateTime(2026, 11, 2, 8, 0, 0, DateTimeKind.Utc);
+        var job = PendingDelete.New(due, "dpapi:AAAA", "77");
+        Assert.True(PendingDelete.TryParse(job.Format(), out var back));
+        Assert.Equal(job, back);
+
+        // A shorter delay first, then doubling, and never past the give-up time.
+        long now = due.Ticks;
+        var first = job.Retry(now);
+        Assert.Equal(now + TimeSpan.TicksPerMinute, first.DueTicks);
+        long hour = now + TimeSpan.TicksPerHour;
+        Assert.Equal(hour + TimeSpan.TicksPerHour, job.Retry(hour).DueTicks);
+        Assert.Equal(job.GiveUpTicks, job.Retry(job.GiveUpTicks - TimeSpan.TicksPerMinute).DueTicks);
+        Assert.False(job.Expired(job.GiveUpTicks - 1));
+        Assert.True(job.Expired(job.GiveUpTicks));
+
+        Assert.True(PendingDelete.TryParse($"{due.Ticks}\t{Hook}\t77", out var old));   // the older format
+        Assert.Equal((Hook, "77", job.GiveUpTicks), (old.Webhook, old.MessageId, old.GiveUpTicks));
+
+        Assert.False(PendingDelete.TryParse("x\ty\tz", out _));
+        Assert.False(PendingDelete.TryParse($"{due.Ticks}\t{Hook}", out _));
+        Assert.False(PendingDelete.TryParse($"{due.Ticks}\t{Hook}\t../../x", out _));   // the id goes into a URL
     }
 
     [Fact]
@@ -124,5 +196,9 @@ public class PresenceTests
         Assert.Contains("minConf", ex.Message);
         ex = Assert.Throws<ConfigException>(() => ConfigLoader.Validate(new Config { Screenshot = new ScreenshotConfig { BorderS = 99 } }));
         Assert.Contains("borderS", ex.Message);
+        ex = Assert.Throws<ConfigException>(() => ConfigLoader.Validate(new Config { Screenshot = new ScreenshotConfig { BorderS = 0 } }));   // no border, no secret screenshots
+        Assert.Contains("borderS", ex.Message);
+        ex = Assert.Throws<ConfigException>(() => ConfigLoader.Validate(new Config { Presence = new PresenceConfig { MinIntervalS = -1 } }));
+        Assert.Contains("minIntervalS", ex.Message);
     }
 }

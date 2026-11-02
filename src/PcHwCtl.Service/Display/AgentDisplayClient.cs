@@ -1,4 +1,8 @@
+using System.ComponentModel;
+using System.Diagnostics;
 using System.IO.Pipes;
+using System.Runtime.InteropServices;
+using System.Security.Principal;
 using System.Text;
 using System.Text.Json;
 using PcHwCtl.Core.Display;
@@ -98,8 +102,10 @@ public sealed class AgentDisplayClient : IDisplayControl, IDisposable
         {
             try
             {
-                using var pipe = new NamedPipeClientStream(".", DisplayAgent.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous);
+                // Anonymous: whoever holds the name must not get to act as SYSTEM.
+                using var pipe = new NamedPipeClientStream(".", DisplayAgent.PipeName, PipeDirection.InOut, PipeOptions.Asynchronous, TokenImpersonationLevel.Anonymous);
                 pipe.Connect(ConnectTimeoutMs);
+                CheckServer(pipe);
                 using var writer = new StreamWriter(pipe, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true, NewLine = "\n" };
                 using var reader = new StreamReader(pipe, new UTF8Encoding(false), leaveOpen: true);
                 writer.WriteLine(line);
@@ -110,7 +116,7 @@ public sealed class AgentDisplayClient : IDisplayControl, IDisposable
                 _status = null;
                 return reply;
             }
-            catch (Exception ex) when (ex is TimeoutException or IOException or UnauthorizedAccessException or AggregateException)
+            catch (Exception ex) when (ex is TimeoutException or IOException or UnauthorizedAccessException or AggregateException or Win32Exception or ArgumentException)
             {
                 string status = $"display agent not reachable: {ex.Message}";
                 if (_status == null) _log(status);
@@ -120,6 +126,24 @@ public sealed class AgentDisplayClient : IDisplayControl, IDisposable
             }
         }
     }
+
+    /// <summary>
+    /// Pipe names are machine-wide and first come, first served, so the name proves nothing: the commands (webhook
+    /// included) only go to a server running this same program, which sits in the admin-only install directory.
+    /// </summary>
+    private static void CheckServer(NamedPipeClientStream pipe)
+    {
+        if (!GetNamedPipeServerProcessId(pipe.SafePipeHandle, out uint pid)) throw new IOException($"no pipe server process (error {Marshal.GetLastWin32Error()})");
+        using var server = Process.GetProcessById((int)pid);
+        string? image = server.MainModule?.FileName;
+        if (!string.Equals(image, Environment.ProcessPath, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new UnauthorizedAccessException($"{DisplayAgent.PipeName} is held by pid {pid} ({image ?? "unknown image"}), not the agent");
+        }
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool GetNamedPipeServerProcessId(Microsoft.Win32.SafeHandles.SafePipeHandle pipe, out uint processId);
 
     public void Dispose() => _cts.Cancel();
 }

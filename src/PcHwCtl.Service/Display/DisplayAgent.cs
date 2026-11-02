@@ -60,9 +60,9 @@ public static class DisplayAgent
         {
             await ServeAsync(agent, Log, cts.Token);
         }
-        catch (IOException ex)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            // Pipe name taken: another agent already serves this session.
+            // Pipe name taken: another agent already serves this session, or something else holds the name.
             Log($"Pipe {PipeName} unavailable ({ex.Message}), exiting.");
             return 1;
         }
@@ -86,45 +86,61 @@ public static class DisplayAgent
 
     private static async Task ServeAsync(AgentCommands agent, Action<string> log, CancellationToken ct)
     {
-        while (!ct.IsCancellationRequested)
+        // One client at a time, but the next instance exists before the last one closes: the name is never free for
+        // another process to take, and FirstPipeInstance refuses to start on a name someone already holds.
+        var pipe = NewPipe(PipeOptions.FirstPipeInstance);
+        try
         {
-            using var pipe = NamedPipeServerStreamAcl.Create(PipeName, PipeDirection.InOut, 1,
-                PipeTransmissionMode.Byte, PipeOptions.Asynchronous, 0, 0, Security());
-            try
+            while (!ct.IsCancellationRequested)
             {
-                await pipe.WaitForConnectionAsync(ct);
-            }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
-
-            try
-            {
-                using var reader = new StreamReader(pipe, new UTF8Encoding(false), leaveOpen: true);
-                using var writer = new StreamWriter(pipe, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true, NewLine = "\n" };
-                while (!ct.IsCancellationRequested && await reader.ReadLineAsync(ct) is string line)
+                try
                 {
-                    string[] tokens = line.TrimStart('\uFEFF').Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                    string reply;
-                    try
-                    {
-                        reply = agent.Execute(tokens);
-                    }
-                    catch (Exception ex)
-                    {
-                        reply = $"{{\"ok\":false,\"error\":{System.Text.Json.JsonSerializer.Serialize(ex.Message)}}}";
-                    }
-                    if (tokens.Length > 0 && !tokens[0].Equals("list", StringComparison.OrdinalIgnoreCase)) log($"{AgentCommands.ForLog(tokens)} -> {reply}");
-                    await writer.WriteLineAsync(reply);
+                    await pipe.WaitForConnectionAsync(ct);
                 }
-            }
-            catch (Exception ex) when (ex is IOException or OperationCanceledException)
-            {
-                // Client went away mid-conversation.
+                catch (OperationCanceledException)
+                {
+                    return;
+                }
+
+                try
+                {
+                    using var reader = new StreamReader(pipe, new UTF8Encoding(false), leaveOpen: true);
+                    using var writer = new StreamWriter(pipe, new UTF8Encoding(false), leaveOpen: true) { AutoFlush = true, NewLine = "\n" };
+                    while (!ct.IsCancellationRequested && await reader.ReadLineAsync(ct) is string line)
+                    {
+                        string[] tokens = line.TrimStart('\uFEFF').Split(' ', StringSplitOptions.RemoveEmptyEntries);
+                        string reply;
+                        try
+                        {
+                            reply = agent.Execute(tokens);
+                        }
+                        catch (Exception ex)
+                        {
+                            reply = $"{{\"ok\":false,\"error\":{System.Text.Json.JsonSerializer.Serialize(ex.Message)}}}";
+                        }
+                        // Not "presence": a line a minute would be a diary of when someone sits at the PC.
+                        if (tokens.Length > 0 && tokens[0].ToLowerInvariant() is not ("list" or "presence")) log($"{AgentCommands.ForLog(tokens)} -> {reply}");
+                        await writer.WriteLineAsync(reply);
+                    }
+                }
+                catch (Exception ex) when (ex is IOException or OperationCanceledException)
+                {
+                    // Client went away mid-conversation.
+                }
+
+                var next = NewPipe(PipeOptions.None);
+                pipe.Dispose();
+                pipe = next;
             }
         }
+        finally
+        {
+            pipe.Dispose();
+        }
     }
+
+    private static NamedPipeServerStream NewPipe(PipeOptions extra) => NamedPipeServerStreamAcl.Create(PipeName, PipeDirection.InOut, 2,
+        PipeTransmissionMode.Byte, PipeOptions.Asynchronous | extra, 0, 0, Security());
 
     /// <summary>The service (SYSTEM), administrators and the user this agent runs as.</summary>
     private static PipeSecurity Security()
