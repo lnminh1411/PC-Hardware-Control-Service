@@ -1,6 +1,6 @@
 # Documentation summary
 
-Cross-repo system design (ESP32 board, ESP32-Helper, PcHwCtl, LocalAIHost): `E:\System Architecture Documentation\ESP32 - Local LLM - PCHwCtl\ESP32-PcHwCtl-LocalLLM.md`, with an agent-oriented copy `ESP32-PcHwCtl-LocalLLM.agents.md` in the same folder. Where those and this repo's docs disagree, the code wins.
+Cross-repo system design (ESP32 board, ESP32-Helper, PcHwCtl, LocalAIHost): `E:\System Architecture Documentation\ESP32 PC Control System\ESP32-PC-Control-System.md`, with an agent-oriented copy `ESP32-PC-Control-System.agents.md` in the same folder. Where those and this repo's docs disagree, the code wins.
 
 ## Overview
 
